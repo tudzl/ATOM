@@ -1,0 +1,41 @@
+from m5stack import *
+from m5ui import *
+from uiflow import *
+import time
+
+
+
+
+
+
+from numbers import Number
+
+run_cnt = None
+flush = None
+
+
+def buttonA_wasPressed():
+  global run_cnt, flush
+  uart.write('ATOM RS485 test, hello!'+"\r\n")
+  rgb.setColorAll(0x99ff99)
+  wait_ms(50)
+  pass
+btnA.wasPressed(buttonA_wasPressed)
+
+uart_USB = machine.UART(1, tx=17, rx=16)
+uart_USB.init(115200, bits=8, parity=None, stop=1)
+
+uart = machine.UART(1, tx=32, rx=26)
+uart.init(115200, bits=8, parity=None, stop=1)
+run_cnt = 0
+while True:
+  if uart.any():
+    flush = uart.read()
+    rgb.setColorAll(0xff99ff)
+    rgb.setColorAll(0x66ffff)
+    rgb.setColorAll(0xff6666)
+  #uart1.write('run_cnt\r\n')
+  rgb.setColorAll(0xffffff)
+  rgb.setColorAll(0x000000)
+  run_cnt = (run_cnt if isinstance(run_cnt, Number) else 0) + 1
+  wait_ms(500)
