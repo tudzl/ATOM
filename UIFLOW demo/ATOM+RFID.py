@@ -4,8 +4,16 @@ from uiflow import *
 import i2c_bus
 import unit
 from numbers import Number
-#V1.2 19.06.2020 working!
+from micropython import const
+#V1.2 19.06.2020 working! 
+#detect tag ID and data , send them through RS-485, Modbus not used in this code version V1.2
 #Connect this NTAG213 13.56Mhz RFID Unit toSDA G25, SCL G21 on  ATOM , IIC adress is 0x28. (DEC 40)
+
+
+OK = const(0)
+NOTAGERR = const(1)
+ERR = const(2)
+
 
 # ATOM PORT IO
 IIC_PORTA = (25,21) # I2C
@@ -28,20 +36,43 @@ TAG_near = None
 
 # Top Btn to write tag, send 485 test only
 def buttonA_wasPressed():
-  #global cnt
+  #global cntNone
   global RFID_ID, TAG_Reg0, TAG_near
+  stat = None
   print('#-->:BtnA was pressed!'+"\r\n")
   if TAG_near:
-     rfid0.writeBlock(1,'16BV_001')
-     print('#-->:RFID write data to TAG REG1: 16BV_001'+"\r\n")
+     print('#-->:RFID writting data to TAG REG1: 16BV_001'+"\r\n")
+     stat=rfid0.writeBlock(1,'16BV_001')
+     if stat== OK:
+       print('#-->:RFID write REG1 successful')
+     else:
+       print('#-->:RFID write REG1 failed!')
+     print('#-->:RFID write data to TAG REG2: 16BV_002'+"\r\n")
+     stat=rfid0.writeBlock(2,'16BV_002')
+     if stat== OK:
+       print('#-->:RFID write REG2 successful')
+     else:
+       print('#-->:RFID write REG2 failed!')
+     print('#-->:RFID write data to TAG REG5: 16BV_005'+"\r\n")
+     stat=rfid0.writeBlock(5,'16BV_005')
+     if stat== OK:
+       print('#-->:RFID write REG5 successful')
+     else:
+       print('#-->:RFID write REG5 failed!')
+     stat=rfid0.writeBlock(9,'16BV_009')
+     if stat== OK:
+       print('#-->:RFID write REG9 successful')
+     else:
+       print('#-->:RFID write REG9 failed!')
+    
   rgb.setBrightness(20)
   rgb.set_screen([0,0,0xFFFFFF,0,0,0,0xFFFFFF,0,0xFFFFFF,0,0xFFFFFF,0,0x4bd425,0,0xFFFFFF,0,0xFFFFFF,0,0xFFFFFF,0,0,0,0xFFFFFF,0,0])
   wait_ms(100)
   rgb.setBrightness(5)
   print('#-->:RS485 send tag data now...'+"\r\n") 
   uart.write(str('RFID ID and data:'))#cost 2ms
-  uart.write(str(RFID_ID)+',') #cost 8ms interval
-  uart.write(str(TAG_Reg0)+"\r\n")
+  uart.write(str(RFID_ID)+',') #cost 5ms interval to 1st msg
+  uart.write(str(TAG_Reg0)+"\r\n") #cost 2.5ms interval to above msg
   rgb.setColorAll(0x33ff33)
   pass
 btnA.wasPressed(buttonA_wasPressed)
@@ -94,6 +125,11 @@ while True:
     TAG_Reg0 = rfid0.readBlockStr(1)
     print('Tag_ID: '+rfid0.readUid())
     print('Tag_Reg1: '+rfid0.readBlockStr(1))
+    print('Tag_Reg2: '+rfid0.readBlockStr(2))
+    print('Tag_Reg3: '+rfid0.readBlockStr(3))
+    print('Tag_Reg4: '+rfid0.readBlockStr(4))
+    print('Tag_Reg5: '+rfid0.readBlockStr(5))
+    print('Tag_Reg6: '+rfid0.readBlockStr(5))
     wait_ms(50)
   else:
     TAG_near = 0
