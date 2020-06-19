@@ -1,0 +1,44 @@
+from m5stack import *
+from m5ui import *
+from uiflow import *
+import unit
+
+rfid0 = unit.get(unit.RFID, unit.PORTA)
+
+
+
+
+
+RFID_ID = None
+TAG_Reg0 = None
+TAG_near = None
+
+
+def buttonA_wasPressed():
+  global RFID_ID, TAG_Reg0, TAG_near
+  uart.write(str('RFID ID and Reg0 data:')+"\r\n")
+  uart1.write(str(str(RFID_ID))+"\r\n")
+  uart1.write(str(str(TAG_Reg0))+"\r\n")
+  rgb.setColorAll(0x33ff33)
+  print('RFID ID and Reg0 data:')
+  print(str(RFID_ID))
+  print(str(TAG_Reg0))
+  pass
+btnA.wasPressed(buttonA_wasPressed)
+
+
+uart = machine.UART(1, tx=26, rx=32)
+uart.init(115200, bits=8, parity=None, stop=1)
+while True:
+  rgb.setColorAll(0x000000)
+  if rfid0.isCardOn():
+    TAG_near = 1
+    RFID_ID = rfid0.readUid()
+    TAG_Reg0 = rfid0.readBlockStr(1)
+    print(rfid0.readUid())
+    print(rfid0.readBlockStr(1))
+  else:
+    TAG_near = 0
+    RFID_ID = 0
+    TAG_Reg0 = 0
+  wait_ms(2)
