@@ -4,13 +4,15 @@ from uiflow import *
 import i2c_bus
 import unit
 from numbers import Number
-#V1.1 19.06.2020 working!
-#Connect this RFID Unit toSDA G25, SCL G21 on  ATOM , IIC adress is 0x28. (DEC 40)
+#V1.2 19.06.2020 working!
+#Connect this NTAG213 13.56Mhz RFID Unit toSDA G25, SCL G21 on  ATOM , IIC adress is 0x28. (DEC 40)
 
 # ATOM PORT IO
 IIC_PORTA = (25,21) # I2C
 unit.PORTA = (25,21)  # seems used in the unit init!unit.get(unit.RFID, unit.PORTA) # fit ATOM?
 #i2c0  = i2c_bus.easyI2C((25, 21), 0x28)
+print('< Intelligent 16-BV connector with RS485 Port & NFC program v1.1 >'+"\r\n");
+print('< Author: Ling.Zell, li.zhou@staubli.com, 19.June.2020 >'+"\r\n");
 print('#-->:i2c_bus.easyI2C(PORTA, 0x28, freq=100000)')
 #print('#-->: i2c_bus.easyI2C(i2c_bus.PORTA, 0x28, freq=400000)')
 i2c0 = i2c_bus.easyI2C(IIC_PORTA, 0x28, freq=100000)
@@ -36,10 +38,10 @@ def buttonA_wasPressed():
   rgb.set_screen([0,0,0xFFFFFF,0,0,0,0xFFFFFF,0,0xFFFFFF,0,0xFFFFFF,0,0x4bd425,0,0xFFFFFF,0,0xFFFFFF,0,0xFFFFFF,0,0,0,0xFFFFFF,0,0])
   wait_ms(100)
   rgb.setBrightness(5)
-  print('#-->:RS485 send tag data now...'+"\r\n")
-  uart.write(str('RFID ID and Reg1 data:')+"\r\n")
-  uart.write(str(str(RFID_ID))+"\r\n")
-  uart.write(str(str(TAG_Reg0))+"\r\n")
+  print('#-->:RS485 send tag data now...'+"\r\n") 
+  uart.write(str('RFID ID and data:'))#cost 2ms
+  uart.write(str(RFID_ID)+',') #cost 8ms interval
+  uart.write(str(TAG_Reg0)+"\r\n")
   rgb.setColorAll(0x33ff33)
   pass
 btnA.wasPressed(buttonA_wasPressed)
@@ -81,7 +83,7 @@ run_cnt = 0
 TAG_near = 0
 RFID_ID = 0
 TAG_Reg0 = 0
-print('RFID NTAG213 13.56Mhz intelligent 16-BV connector with RS485 Port code running now!'+"\r\n");
+print('#-->: Main code loop running now...');
 while True:
   rgb.setColorAll(0x000000)
   #print('Check Tag existence:'+"\r\n")
