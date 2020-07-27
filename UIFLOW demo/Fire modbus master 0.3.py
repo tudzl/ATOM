@@ -10,6 +10,7 @@ from machine import ModbusSlave
 #API KEY 82E66B3E
 
 setScreenColor(0x222222)
+lcd.setBrightness(50)
 
 
 
@@ -56,7 +57,7 @@ def buttonA_wasPressed():
   global Slave_add, RTU_funct, REG_0,TX_CNT
   Slave_add =0x01
   RTU_funct =0x03
-  modbus_m.send(Slave_add, RTU_funct, REG_0, 12)
+  modbus_m.send(Slave_add, RTU_funct, REG_0, 1)
   print('buttonA was Pressed, modbus_s.send! ')
   TX_CNT+=1
   pass
@@ -66,7 +67,7 @@ def buttonC_wasPressed():
   global Slave_add, RTU_funct, value_rx_tmp, REG_0,TX_CNT
   Slave_add =0x02
   RTU_funct =0x04
-  modbus_m.send(Slave_add, RTU_funct, REG_0, 90)
+  modbus_m.send(Slave_add, RTU_funct, REG_0, 3)
   print('buttonC was Pressed, modbus_s.send! ')
   TX_CNT+=1
   print(str(TX_CNT))

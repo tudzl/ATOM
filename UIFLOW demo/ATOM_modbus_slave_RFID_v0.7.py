@@ -7,6 +7,8 @@ import i2c_bus
 import unit
 from numbers import Number
 from micropython import const
+#V0.7 added Modbus_RTU_MasterMsg_parse function, test ok
+#SLave address+Func.code+Reg_addr(2B)+number of Words(2B)+CRC(lo first, 2B) = 8 B
 #V0.5, Modbus RTU slave is working, send 9 bytes: SL_add+funct_number+len+NUID_data(4B)+CRC(2B)
 #V0.4, Modbus slave is working, send 13 bytes: SL_add+funct_number+len+data(8B)+CRC(2B)
 #15.07.2020 author: ling ZHOU
@@ -39,8 +41,8 @@ RS485_UART = (1,25,21) # TX,RX
 IIC_PORTA = (26,32) # I2C  for 16BV demo
 unit.PORTA = (26,32)  # seems used in the unit init!unit.get(unit.RFID, unit.PORTA) # fit ATOM?
 #i2c0  = i2c_bus.easyI2C((25, 21), 0x28)
-print('< Intelligent 16-BV connector with RS485 modbus & NFC program v0.6 >'+"\r\n");
-print('< Author: Ling.Zell, li.zhou@staubli.com, 24.July.2020 >'+"\r\n");
+print('< Intelligent 16-BV connector with RS485 modbus & NFC program v0.7 >'+"\r\n");
+print('< Author: Ling.Zell, li.zhou@staubli.com, 27.July.2020 >'+"\r\n");
 print('#-->:i2c_bus.easyI2C(PORTA, 0x28, freq=100000)')
 print('#-->:RS485_UART: TX_G25,RX_G21@ 115200')
 #print('#-->: i2c_bus.easyI2C(i2c_bus.PORTA, 0x28, freq=400000)')
@@ -65,7 +67,51 @@ def calc_crc(data):
     return crc
 #https://stackoverflow.com/questions/39101926/port-modbus-rtu-crc-to-python-from-c-sharp
 
-
+def Modbus_RTU_MasterMsg_parse(msg):
+    global Slave_add
+    ret = None
+    CRC = None
+    CRC_Lo = None
+    CRC_Hi = None
+    # 3 to read NUID 4Bytes data
+    # 4 to read user date, assume 8 Bytes?
+    # 1 slave address not match
+    # 0 unvalid msg,(length  error)
+    # -1 errors
+    # -2 error with CRC
+    # 
+    msg_len = len(msg)
+    if (msg_len!=8):
+        ret = 0
+        print("#>:Modbus Msg lengh not equal to 8!")
+        return ret
+    else:
+        CRC = calc_crc(msg[0:-2])
+        CRC_Hi = CRC>>8
+        CRC_Lo = CRC&0x00FF
+        print("#>:Calc CRC:")
+        print(str(hex(CRC)))
+        #print(str(hex(CRC_Hi)))
+        #print(str(hex(CRC_Lo)))
+        CRC_Ori = msg[-2]+(msg[-1]<<8)
+        print("RX CRC: "+(hex(CRC_Ori)))
+        if (CRC!= CRC_Ori):
+            ret = -2
+            print("#>:Modbus Msg CRC error!")
+            return ret
+        
+    if (msg[0] == Slave_add):
+        ret =  msg[1]
+        if (ret>5):
+            ret = -1
+        elif(ret<1):
+            ret = -1
+        print("Modbus Master Msg parse successful!")
+        return ret
+    else:
+        ret =1
+        #print("#>:Modbus slave address not match!")
+        return ret
 '''
 def modbus_s_write_cb(x):
   global fun,REG_addr,tmp_data,var
@@ -81,7 +127,40 @@ def modbus_s_write_cb(x):
   pass
 modbus_s.set_write_cb(modbus_s_write_cb)
 '''
-
+def Modbus_send_NUID():
+  global Slave_add,Func_readID, RFID_ID_pre,ID_len
+  print('modbus RTU slave send NUID data now!'+"\r\n")
+  tmp_msg = bytearray(3)# the array will have that size and will be initialized with null bytes.
+  tmp_msg[0] = Slave_add
+  tmp_msg[1] = Func_readID
+  tmp_msg[2] = ID_len
+  #tmp_payload = bytearray(RFID_ID_pre, 'ascii')#not NotImplemented
+  #for 8 bytes payloads
+  #tmp_payload = bytearray(len(RFID_ID_pre))
+  #tmp_payload = RFID_ID_pre
+  #for 4 bytes payloads
+  tmp_var = int(RFID_ID_pre,16)
+  data_payload = bytearray(ID_len)
+  data_payload[0] = tmp_var>>24
+  data_payload[1] = (tmp_var>>16)&0xFF
+  data_payload[2] = (tmp_var>>8)&0xFF
+  data_payload[3] = tmp_var&0xFF
+  CRC_bytes = tmp_msg+data_payload
+  #CRC_bytes = tmp_msg+tmp_payload
+  CRC_list= list(CRC_bytes)
+  CRC_Res= calc_crc(CRC_list)
+  CRC_payload = bytearray(2)
+  CRC_payload[0] = CRC_Res>>8
+  CRC_payload[1] = (CRC_Res<<8)>>8
+  uart.write(tmp_msg)
+  #uart.write(tmp_payload)
+  uart.write(data_payload)
+  uart.write(CRC_payload)
+  print('Modbus msg sent with frame:')
+  print(str(CRC_bytes)+str(CRC_payload))
+  pass
+  
+  
 
 def buttonA_wasPressed():
   global fun, REG_addr, tmp_data, var
@@ -90,8 +169,8 @@ def buttonA_wasPressed():
   
   var = 0x02<<16
   var = var+9999#141071, 0x02270f
-  modbus_s.update_function(4, 1, var)
-  modbus_s.send(1, 3, 1, var)#slave address, 功能码、寄存器地址、数据
+  #modbus_s.update_function(4, 1, var)
+  #modbus_s.send(1, 3, 1, var)#slave address, 功能码、寄存器地址、数据
 
   rgb.setColorAll(0x1f6060)
   '''
@@ -117,8 +196,8 @@ def buttonA_wasPressed():
   data_payload[1] = (tmp_var>>16)&0xFF
   data_payload[2] = (tmp_var>>8)&0xFF
   data_payload[3] = tmp_var&0xFF
-  #CRC_bytes = tmp_msg+data_payload
-  CRC_bytes = tmp_msg+tmp_payload
+  CRC_bytes = tmp_msg+data_payload
+  #CRC_bytes = tmp_msg+tmp_payload
   CRC_list= list(CRC_bytes)
   CRC_Res= calc_crc(CRC_list)
   CRC_payload = bytearray(2)
@@ -189,6 +268,7 @@ RTU_master = None
 TAG_near = 0
 RFID_ID = 0
 TAG_Reg0 = 0
+RTU_CMD_code= 0 # function code parsed from received master messages
 print('#-->: Main code loop running now...');
 while True:
   rgb.setColorAll(0x000000)
@@ -226,14 +306,17 @@ while True:
     TAG_Reg0 = 0
   #----UART read from master
   if uart.any():
-     print('Uart/Modbus Receved msg: ')
+     print('Uart/Modbus Receved raw msg:')
      #print((uart.read()).decode(), 0, 0, 0xffffff)
      #print((uart.read()).decode())#bugs  UnicodeError: 
      RTU_master =uart.read()
-     print(str(RTU_master))
+     print((RTU_master))
+     RTU_CMD_code = Modbus_RTU_MasterMsg_parse(RTU_master)
+     print('Modbus request code:')
+     print(str(RTU_CMD_code))
      #print(uart.read())#bugs  UnicodeError:
-     print('decode msg len: ')
-     print(str(len(RTU_master)))#None
+     #print('decode msg len: ')
+     #print(str(len(RTU_master)))#None
      #print((uart.read()).decode()) 
      '''
      #Traceback (most recent call last):
