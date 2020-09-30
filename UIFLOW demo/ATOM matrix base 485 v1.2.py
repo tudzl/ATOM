@@ -12,6 +12,7 @@ from micropython import const
 #Atom matrix mpu6886 0x68, dec104
 #RFID 0x28 dec40
 #BMP388 0x77
+#V1.2 improve rgb led for matrix
 #V1.1 fit to ATOM Matrix #1, 5E9363E1
 #V1.0 changed to fit Base485 PCB demo, IIC: G21(SCL)+ G25(SDA); G22(TX)+G19(RX)
 # Base485 PCB: G23-->blue LED; G33-->Green LED top side
