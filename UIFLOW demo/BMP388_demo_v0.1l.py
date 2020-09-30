@@ -7,6 +7,13 @@ from machine import UART
 import i2c_bus
 import unit
 from numbers import Number
+import time
+from micropython import const
+try:
+    import struct
+except ImportError:
+    import ustruct as struct
+
 from micropython import const
 #IIC address:
 #Atom matrix mpu6886 0x68, dec104
@@ -58,6 +65,214 @@ RFID_ID = None
 RFID_ID_pre = None
 TAG_Reg0 = None
 TAG_near = None
+#BMP388
+
+_CHIP_ID = const(0x50)
+
+# pylint: disable=import-outside-toplevel
+_REGISTER_CHIPID = const(0x00)
+_REGISTER_STATUS = const(0x03)
+_REGISTER_PRESSUREDATA = const(0x04)
+_REGISTER_TEMPDATA = const(0x07)
+_REGISTER_CONTROL = const(0x1B)
+_REGISTER_OSR = const(0x1C)
+_REGISTER_ODR = const(0x1D)
+_REGISTER_CONFIG = const(0x1F)
+_REGISTER_CAL_DATA = const(0x31)
+_REGISTER_CMD = const(0x7E)
+_OSR_SETTINGS = (1, 2, 4, 8, 16, 32)  # pressure and temperature oversampling settings
+_IIR_SETTINGS = (0, 2, 4, 8, 16, 32, 64, 128)  # IIR filter coefficients
+class BMP3XX:
+    """Base class for BMP3XX sensor."""
+
+    def __init__(self):
+        chip_id = self._read_byte(_REGISTER_CHIPID)
+        if _CHIP_ID != chip_id:
+            raise RuntimeError("Failed to find BMP3XX! Chip ID 0x%x" % chip_id)
+        self._read_coefficients()
+        self.reset()
+        self.sea_level_pressure = 1013.25
+        """Sea level pressure in hPa."""
+
+    @property
+    def pressure(self):
+        """The pressure in hPa."""
+        return self._read()[0] / 100
+
+    @property
+    def temperature(self):
+        """The temperature in deg C."""
+        return self._read()[1]
+
+    @property
+    def altitude(self):
+        """The altitude in meters based on the currently set sea level pressure."""
+        # see https://www.weather.gov/media/epz/wxcalc/pressureAltitude.pdf
+        return 44307.7 * (1 - (self.pressure / self.sea_level_pressure) ** 0.190284)
+
+    @property
+    def pressure_oversampling(self):
+        """The pressure oversampling setting."""
+        return _OSR_SETTINGS[self._read_byte(_REGISTER_OSR) & 0x07]
+
+    @pressure_oversampling.setter
+    def pressure_oversampling(self, oversample):
+        if oversample not in _OSR_SETTINGS:
+            raise ValueError("Oversampling must be one of: {}".format(_OSR_SETTINGS))
+        new_setting = self._read_byte(_REGISTER_OSR) & 0xF8 | _OSR_SETTINGS.index(
+            oversample
+        )
+        self._write_register_byte(_REGISTER_OSR, new_setting)
+
+    @property
+    def temperature_oversampling(self):
+        """The temperature oversampling setting."""
+        return _OSR_SETTINGS[self._read_byte(_REGISTER_OSR) >> 3 & 0x07]
+
+    @temperature_oversampling.setter
+    def temperature_oversampling(self, oversample):
+        if oversample not in _OSR_SETTINGS:
+            raise ValueError("Oversampling must be one of: {}".format(_OSR_SETTINGS))
+        new_setting = (
+            self._read_byte(_REGISTER_OSR) & 0xC7 | _OSR_SETTINGS.index(oversample) << 3
+        )
+        self._write_register_byte(_REGISTER_OSR, new_setting)
+
+    @property
+    def filter_coefficient(self):
+        """The IIR filter coefficient."""
+        return _IIR_SETTINGS[self._read_byte(_REGISTER_CONFIG) >> 1 & 0x07]
+
+    @filter_coefficient.setter
+    def filter_coefficient(self, coef):
+        if coef not in _IIR_SETTINGS:
+            raise ValueError(
+                "Filter coefficient must be one of: {}".format(_IIR_SETTINGS)
+            )
+        self._write_register_byte(_REGISTER_CONFIG, _IIR_SETTINGS.index(coef) << 1)
+
+    def reset(self):
+        """Perform a power on reset. All user configuration settings are overwritten
+        with their default state.
+        """
+        self._write_register_byte(_REGISTER_CMD, 0xB6)
+
+    def _read(self):
+        """Returns a tuple for temperature and pressure."""
+        # OK, pylint. This one is all kinds of stuff you shouldn't worry about.
+        # pylint: disable=invalid-name, too-many-locals
+
+        # Perform one measurement in forced mode
+        self._write_register_byte(_REGISTER_CONTROL, 0x13)
+
+        # Wait for *both* conversions to complete
+        while self._read_byte(_REGISTER_STATUS) & 0x60 != 0x60:
+            time.sleep(0.002)
+
+        # Get ADC values
+        data = self._read_register(_REGISTER_PRESSUREDATA, 6)
+        adc_p = data[2] << 16 | data[1] << 8 | data[0]
+        adc_t = data[5] << 16 | data[4] << 8 | data[3]
+
+        # datasheet, sec 9.2 Temperature compensation
+        T1, T2, T3 = self._temp_calib
+
+        pd1 = adc_t - T1
+        pd2 = pd1 * T2
+
+        temperature = pd2 + (pd1 * pd1) * T3
+
+        # datasheet, sec 9.3 Pressure compensation
+        P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11 = self._pressure_calib
+
+        pd1 = P6 * temperature
+        pd2 = P7 * temperature ** 2.0
+        pd3 = P8 * temperature ** 3.0
+        po1 = P5 + pd1 + pd2 + pd3
+
+        pd1 = P2 * temperature
+        pd2 = P3 * temperature ** 2.0
+        pd3 = P4 * temperature ** 3.0
+        po2 = adc_p * (P1 + pd1 + pd2 + pd3)
+
+        pd1 = adc_p ** 2.0
+        pd2 = P9 + P10 * temperature
+        pd3 = pd1 * pd2
+        pd4 = pd3 + P11 * adc_p ** 3.0
+
+        pressure = po1 + po2 + pd4
+
+        # pressure in Pa, temperature in deg C
+        return pressure, temperature
+
+    def _read_coefficients(self):
+        """Read & save the calibration coefficients"""
+        coeff = self._read_register(_REGISTER_CAL_DATA, 21)
+        # See datasheet, pg. 27, table 22
+        coeff = struct.unpack("<HHbhhbbHHbbhbb", coeff)
+        # See datasheet, sec 9.1
+        # Note: forcing float math to prevent issues with boards that
+        #       do not support long ints for 2**<large int>
+        self._temp_calib = (
+            coeff[0] / 2 ** -8.0,  # T1
+            coeff[1] / 2 ** 30.0,  # T2
+            coeff[2] / 2 ** 48.0,
+        )  # T3
+        self._pressure_calib = (
+            (coeff[3] - 2 ** 14.0) / 2 ** 20.0,  # P1
+            (coeff[4] - 2 ** 14.0) / 2 ** 29.0,  # P2
+            coeff[5] / 2 ** 32.0,  # P3
+            coeff[6] / 2 ** 37.0,  # P4
+            coeff[7] / 2 ** -3.0,  # P5
+            coeff[8] / 2 ** 6.0,  # P6
+            coeff[9] / 2 ** 8.0,  # P7
+            coeff[10] / 2 ** 15.0,  # P8
+            coeff[11] / 2 ** 48.0,  # P9
+            coeff[12] / 2 ** 48.0,  # P10
+            coeff[13] / 2 ** 65.0,
+        )  # P11
+
+    def _read_byte(self, register):
+        """Read a byte register value and return it"""
+        #return self._read_register(register, 1)[0]
+        return self._read_register(register, 1)
+
+    def _read_register(self, register, length):
+        """Low level register reading, not implemented in base class"""
+        raise NotImplementedError()
+
+    def _write_register_byte(self, register, value):
+        """Low level register writing, not implemented in base class"""
+        raise NotImplementedError()
+
+
+class BMP3XX_I2C(BMP3XX):
+    """Driver for I2C connected BMP3XX. Default address is 0x77 but another address can be passed
+       in as an argument"""
+    
+    def __init__(self, i2c, address=0x77):
+        #import adafruit_bus_device.i2c_device as i2c_device
+
+        #self._i2c = i2c_device.I2CDevice(i2c, address)
+        #super().__init__()
+        return
+    
+
+    def _read_register(register, length):
+            """Low level register reading over I2C, returns a list of values"""
+            result = bytearray(length)
+            #i2c.write(bytes([register & 0xFF]))
+            #i2c.write_u8(bytes([register & 0xFF]))
+            #i2c.readinto(result)
+            result = i2c.read_u8(bytes([register & 0xFF]))
+            
+            return result
+
+    def _write_register_byte(register, value):
+            """Low level register writing over I2C, writes one 8-bit value"""
+            #i2c.write(bytes((register & 0xFF, value & 0xFF)))
+            i2c.write_u8(bytes((register & 0xFF, value & 0xFF)))
+
 # ATOM PORT IO 
 RS485_UART = (1,22,19) # TX,RX
 #RS485_UART = (1,25,21) # TX,RX
@@ -72,11 +287,17 @@ print('#-->:RS485_UART: TX_G22,RX_G19@ 115200')
 #print('#-->: i2c_bus.easyI2C(i2c_bus.PORTA, 0x28, freq=400000)')
 i2c0 = i2c_bus.easyI2C(IIC_PORTA, 0x77, freq=100000)
 
+#BMP388 demo
+
+#bmp = BMP3XX()
+bmp = BMP3XX_I2C(i2c0)
+#bmp = BMP3XX_I2C(i2c0)  #TypeError: function takes 1 positional arguments but 2 were given
+bmp.pressure_oversampling = 8
+bmp.temperature_oversampling = 2
 
 
 RFID_ID_pre ='00000000'
-#modbus_s.init_function(4, 1, 100, ModbusSlave.METHOD_WRITE)
-#modbus_s.init_function(3, 1, 100, ModbusSlave.METHOD_READ)
+
 
 def calc_crc(data):
     crc = 0xFFFF
@@ -136,21 +357,7 @@ def Modbus_RTU_MasterMsg_parse(msg):
         ret =1
         #print("#>:Modbus slave address not match!")
         return ret
-'''
-def modbus_s_write_cb(x):
-  global fun,REG_addr,tmp_data,var
-  fun, REG_addr, tmp_data = x.read()
-  var = tmp_data[1]
-  if fun == 4 and REG_addr == 1:
-    modbus_s.update_function(fun, REG_addr, 90)
-    modbus_s.send(1, 3, 1, 90)
-    if var == 9:
-      rgb.setColorAll(0x6600cc)
-      print('modbus received msg!')
 
-  pass
-modbus_s.set_write_cb(modbus_s_write_cb)
-'''
 def Modbus_send_NUID():
   global Slave_add,Func_readID, RFID_ID_pre,ID_len
   digitalWrite(LED_Green_pin, 1)
@@ -191,71 +398,7 @@ def Modbus_send_NUID():
   
   
 
-def buttonA_wasPressed():
-  global fun, REG_addr, tmp_data, var
-  print('modbus RTU slave sending msg now!'+"\r\n")
-  #tmp_msg=(b"\x01\x02")
-  digitalWrite(LED_Green_pin, 1)
-  #modbus_s.update_function(4, 1, var)
-  #modbus_s.send(1, 3, 1, var)#slave address, 功能码、寄存器地址、数据
 
-  #rgb.setColorAll(0x1f6060)
-  rgb.set_screen([0x0df21c,0,0x89e6cf,0,0x0df21c,0,0,0x0df21c,0,0,0x89e6cf,0x0df21c,0x0db3c9,0x0df21c,0x89e6cf,0,0,0x0df21c,0,0,0x0df21c,0,0x89e6cf,0,0x0df21c])
-  '''
-  uart.write('data:')
-  #uart.write(01)
-  uart.write(b"\xAA")
-  uart.write(b"\x00")
-  '''
-  var= 3
-  #ID_len = len(RFID_ID_pre)
-  tmp_msg = bytearray(var)# the array will have that size and will be initialized with null bytes.
-  tmp_msg[0] = Slave_add
-  tmp_msg[1] = Func_readID
-  tmp_msg[2] = ID_len
-  #tmp_payload = bytearray(RFID_ID_pre, 'ascii')#not NotImplemented
-  #for 8 bytes payloads
-  tmp_payload = bytearray(len(RFID_ID_pre))
-  tmp_payload = RFID_ID_pre
-  #for 4 bytes payloads
-  tmp_var = int(RFID_ID_pre,16)
-  data_payload = bytearray(ID_len)
-  data_payload[0] = tmp_var>>24
-  data_payload[1] = (tmp_var>>16)&0xFF
-  data_payload[2] = (tmp_var>>8)&0xFF
-  data_payload[3] = tmp_var&0xFF
-  CRC_bytes = tmp_msg+data_payload
-  #CRC_bytes = tmp_msg+tmp_payload
-  CRC_list= list(CRC_bytes)
-  CRC_Res= calc_crc(CRC_list)
-  CRC_payload = bytearray(2)
-  CRC_payload[0] = CRC_Res>>8
-  CRC_payload[1] = (CRC_Res<<8)>>8
-  uart.write(tmp_msg)
-  #uart.write(tmp_payload)
-  uart.write(data_payload)
-  uart.write(CRC_payload)
-  #tmp_msg[1] = var>>16
-  rgb.set_screen([0x0df21c,0,0x89e6cf,0,0x0df21c,0,0,0x0df21c,0,0,0x89e6cf,0x0df21c,0x01ee01,0x0df21c,0x89e6cf,0,0,0x0df21c,0,0,0x0df21c,0,0x89e6cf,0,0x0df21c])
-  print('Modbus msg sent with frame head:')
-  print(str(tmp_msg))
-  print("\r\n")
-  print('data_payload:')
-  print(str(tmp_payload))
-  print("\r\n")
-  print('data_len:')
-  print(str(ID_len))
-  print("\r\n")
-  print('CRC16:')
-  print("%04X"%(CRC_Res))
-  print("\r\n")
-      
-  
-  #uart.write(bytes(var))
-  rgb.setColorAll(0x0F6640)
-  digitalWrite(LED_Green_pin, 0)
-  pass
-btnA.wasPressed(buttonA_wasPressed)
 
 
 
@@ -314,37 +457,18 @@ print('#-->: Main code loop running now...')
 digitalWrite(LED_Blue_pin, 0)
 digitalWrite(LED_Green_pin, 0)
 while True:
-  print('#-->:i2c scanning now...')  
+  print('#-->:BMP388 scanning now...')  
+  BMP_temp=bmp.temperature
   try:
     rgb.set_screen([0xe7fd3f,0,0xe7fd3f,0,0,0,0,0,0xca3ffd,0xca3ffd,0x3fabfd,0,0x3fabfd,0xca3ffd,0,0x3fabfd,0,0x3fabfd,0xca3ffd,0xca3ffd,0,0,0,0,0])
-    print(' i2c0.scan results:')
-    addrList=i2c0.scan()
-    Dev_cnt=len(addrList)
-    print(addrList)#DEC
-    wait_ms(10)
-    print(' i2c device available ?:'+str(i2c0.available()))
-    print(' i2c device number:'+str(Dev_cnt))
-    #i2c0.write_u8(0x01, 0xAA)
-    wait_ms(50)
-    #rgb.setColorAll(0x001133)
+
+    print(
+        "Pressure: {:6.1f}  Temperature: {:5.2f}".format(bmp.pressure, bmp.temperature)
+    )
     
-    for i in range(0, Dev_cnt, 1):
-     if (104==addrList[i]): #MPU6886
-        rgb.set_screen([0x3ffda1,0x3f91fd,0x3f91fd,0x3f91fd,0,0x3f91fd,0x3ffda1,0,0,0x3f91fd,0x3f91fd,0,0xe7fd3f,0,0x3f91fd,0x3f91fd,0,0,0x3ffda1,0x3f91fd,0,0x3f91fd,0x3f91fd,0x3f91fd,0x3ffda1])
-        print(' MPU6886 sensor is connected!')
-        wait_ms(500)
-     if (119==addrList[i]): #BMP388
-        rgb.set_screen([0,0xffffff,0,0xffffff,0,0xFFFFFF,0,0xee7ce5,0,0xFFFFFF,0,0xee7ce5,0xee7ce5,0xee7ce5,0,0xFFFFFF,0,0xee7ce5,0,0xFFFFFF,0,0xffffff,0,0xffffff,0])
-        print(' BMP388 sensor is connected!')
-        wait_ms(500)
-    #rfid0 = unit.get(unit.RFID, unit.PORTA) # not fit to ATOM
-    #rfid0 = unit.get(unit.RFID, unit.PORTA) # fit ATOM?
-    #rfid0 = unit.get(unit.RFID, unit.(25,21)) # fit ATOM?
-    #Connect this Unit to GROVE PORTA on M5Core, IIC adress is 0x28.
-    #need improve for unit disconnected case 
   except:
     digitalWrite(LED_Blue_pin, 1)
-    print(' IIC not detected! Please Check! Main code will not run!!!'+"\r\n")
+    print(' IIC BMP388 readout failed!!!'+"\r\n")
     rgb.set_screen([0xfd3f3f,0xfd3f3f,0xfd3f3f,0,0x823ffd,0xfd3f3f,0,0xfd3f3f,0x823ffd,0,0xfd3f3f,0,0xfd3f3f,0x823ffd,0,0xfd3f3f,0,0xfd3f3f,0x823ffd,0,0xfd3f3f,0,0xfd3f3f,0,0x823ffd])
     #rgb.setColorAll(0xFF0000)
     #rgb.set_screen([0,0,0xFF0000,0,0,0,0xFFFFFF,0,0xFF0000,0,0xFFFFFF,0,0xFF0000,0,0xFFFFFF,0,0xFF0000,0,0xFFFFFF,0,0,0,0xFF0000,0,0])
@@ -384,12 +508,6 @@ while True:
      #print(str(len(RTU_master)))#None
      #print((uart.read()).decode()) 
      '''
-	 i2c0.write_mem_data(32, 1, i2c_bus.UINT8LE)
-i2c0.write_u8(0x1b, 0x02)
-print(i2c0.read_reg(0x00, 2))
-i2c0.write_u16(0x00, 0x0000, byteorder="big")
-print(i2c0.read(1))
-print(i2c0.read_u8(0x00))
      #Traceback (most recent call last):
      File "main.py", line 234, in <module>
      AttributeError: 'NoneType' object has no attribute 'decode'
