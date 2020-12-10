@@ -3,7 +3,7 @@ from m5ui import *
 from uiflow import *
 import machine
 #V1.1  add number display support!
-#version 1.0
+#version 1.0 created for 5E9363E1 ATOM matrix to be used as Nidec DC brushless Motot controller
 rgb.setColorAll(0xff0000)
 
 print('Atom Matrix PWM G26 demo v1.0')
@@ -51,16 +51,12 @@ def show_num_single(num):
     elif (num == 4):
       rgb.set_screen([0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0xFFFFFF,0xFFFFFF,0])
     elif (num == 5):
-      rgb.set_screen([0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0xFFFFFF,0xFFFFFF,0])
+      rgb.set_screen([0,0xFFFFFF,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0,0xFFFFFF,0xFFFFFF,0xFFFFFF,0,0,0,0,0,0xFFFFFF,0,0xFFFFFF,0xFFFFFF,0xFFFFFF,0])
     elif (num == 6):
       rgb.set_screen([0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0xFFFFFF,0xFFFFFF,0])
     elif (num == 7):
       rgb.set_screen([0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0xFFFFFF,0xFFFFFF,0])
-    elif (num == 8):
-      rgb.set_screen([0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0xFFFFFF,0xFFFFFF,0])
-    elif (num == 9):
-      rgb.set_screen([0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0,0,0xFFFFFF,0,0,0,0xFFFFFF,0xFFFFFF,0xFFFFFF,0xFFFFFF,0])
-    
+
     pass
 
 
@@ -77,5 +73,3 @@ while True:
   wait_ms(240)
   rgb.setColorAll(0x00ee00)
   wait_ms(20)
-  
-  
