@@ -1,6 +1,7 @@
 #LM75BD(NXP) demo, 
 #V2.2 19.Jan.2021, 2 sensor support!
 #v2.1 13.Jan.2021
+#LM75BD(NXP) demo, 13.Jan.2021
 #mit INA260 base
 from m5stack import *
 from m5ui import *
@@ -79,8 +80,10 @@ class LM75():
 print('ATOM LM75 Temp measurement program v2.2')
 print('Author: Zell, 19.Jan.2021')
 tmp_str = None
-T_LM75A = 0;
-T_LM75B = 0;
+T_LM75A = 0
+T_LM75B = 0
+TF1 = 0
+TF2 = 0
 
 #i2c0 = i2c_bus.easyI2C((26, 32), LM75_ADDRESS, freq=100000)
 i2c0 = i2c_bus.easyI2C(IIC_PORTA, LM75_ADDRESS2, freq=100000)
@@ -118,6 +121,7 @@ while (Scan_EN):
       continue
 while 1:
     try :
+      rgb.setColorAll(0x222211)
       #tmp_str = i2c0.scan()
       #print(tmp_str)
       #label0.setText(str(tmp_str))
@@ -126,29 +130,46 @@ while 1:
       T_LM75A = LM75_sensor.getRawTemp()
       TF1 = LM75_sensor.CalcTemp(T_LM75A)
       print ('TS1: '+str(TF1)+'C')
-      i2c0 = i2c_bus.easyI2C(IIC_PORTA, LM75_ADDRESS2, freq=100000)
-      T_LM75B = LM75_sensor.getRawTemp()
-      TF2 = LM75_sensor.CalcTemp(T_LM75B)
-      print ('TS2: '+str(TF2)+'C')
-      
-      if (TF < T_alert):
+      #i2c0 = i2c_bus.easyI2C(IIC_PORTA, LM75_ADDRESS2, freq=100000)
+      #T_LM75B = LM75_sensor.getRawTemp()
+      #TF2 = LM75_sensor.CalcTemp(T_LM75B)
+      #print ('TS2: '+str(TF2)+'C')
+      if (TF1>=TF2):
+          TF = TF1
+      else:
+          TF = TF2
+      if (TF < T_alert): #Red, under T, turn on PMOS
          digitalWrite(PMOS_gate_pin, 1)
          OUT_EN = True
          rgb.setColorAll(0xA76600)
          print ('<Low T>:output activated!')
-      elif(TF > T_alert+2):
+      elif(TF > T_alert+2): #Blue, over T, turn off PMOS
          digitalWrite(PMOS_gate_pin, 0)
          OUT_EN = False
          rgb.setColorAll(0x0016B0)
          print ('<High T>:output disabled!')
       else: 
          print ('<Window T>:output unchanged')
-         rgb.setColorAll(0x008010)
+         rgb.setColorAll(0x008010) #Green T is in threshold window
          print ('#PMOS driver gate:'+str(OUT_EN))
+      
+      rgb.setColorAll(0x001100)
+    except:
+      print('LM75_A loop error')
+      rgb.setColorAll(0xff1133)
+      wait_ms(100)
+      rgb.setColorAll(0x000000)
+      continue
+    
+    try :
+      i2c0 = i2c_bus.easyI2C(IIC_PORTA, LM75_ADDRESS2, freq=100000)
+      T_LM75B = LM75_sensor.getRawTemp()
+      TF2 = LM75_sensor.CalcTemp(T_LM75B)
+      print ('TS2: '+str(TF2)+'C')
       wait_ms(500)
       rgb.setColorAll(0x001100)
     except:
-      print('LM75 read error')
+      print('LM75_B loop error')
       rgb.setColorAll(0xff1133)
       wait_ms(100)
       rgb.setColorAll(0x000000)
