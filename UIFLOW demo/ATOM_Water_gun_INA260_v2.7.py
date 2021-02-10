@@ -227,7 +227,7 @@ if(INA_OK):
            wait_ms(10)
            config_word = i2c0.read_reg(INA260_REG_CONFIG, 2)
            config_val = int.from_bytes(config_word, False) 
-           print('---readback config value: '+bin(config_def))
+           print('---readback config value: '+bin(config_val))
            """
            ----Default config value: 0b110001011101111
            ----config_bytes   value: 0b110001101101111
