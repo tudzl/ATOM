@@ -52,13 +52,15 @@ T_OS1= (T_alert* 32*8 )
 T_OS1_reg_data = T_OS1.to_bytes(2,'b') 
 
 
+
 #increase or decrease
 def buttonA_wasPressed():
   # global params
   global T_alert,DIR
   rgb.set_screen([0xed1212,0xed1212,0xed1212,0xed1212,0xed1212,0xed1212,0,0,0,0xed1212,0xed1212,0,0,0,0xed1212,0xed1212,0,0,0,0xed1212,0xed1212,0xed1212,0xed1212,0xed1212,0xed1212])
   wait_ms(200)
-  T_alert+=1*DIR
+  print('->:buttonA was pressed!, DIR:'+str(DIR))
+  T_alert= DIR+T_alert
   if (T_alert>=100):
      T_alert =99
   elif (T_alert<0):
@@ -80,13 +82,6 @@ def buttonA_wasPressed():
   pass
 btnA.wasPressed(buttonA_wasPressed)
 
-#decrease/increase by DIR
-def buttonA_pressFor():
-  # global params
-  global DIR
-  DIR = -DIR
-  pass
-btnA.pressFor(0.9, buttonA_pressFor)
 
 #display single digit number
 def show_num_single(num):
@@ -111,7 +106,15 @@ def show_num_single(num):
     elif (num == 9):
       rgb.set_screen([0,0xFFFFEE,0xFFFFEE,0xFFFFEE,0,0,0xFFFFEE,0,0xFFFFEE,0,0,0xFFFFEE,0xFFFFEE,0xFFFFEE,0,0,0,0,0xFFFFEE,0,0,0xFFFFEE,0xFFFFEE,0xFFFFEE,0])
     pass
-
+#decrease/increase by DIR
+def buttonA_pressFor():
+  # global params
+  global DIR
+  #DIR = -1*DIR
+  print('->:buttonA was pressFor 0.8s, DIR:'+str(DIR))
+  wait_ms(300)
+  pass
+btnA.pressFor(0.9, buttonA_pressFor)
 
 
 #class LM75(object):
