@@ -1,6 +1,6 @@
 #INA260 LM75BD(NXP) demo, APIKEY: 7F5367AE
-#V2.7 8.Feb.2021 added INA260 config function!
-#V2.6 8.Feb optimize the current limit function
+#V2.7 improved for 4S LIPO akkus! increase Current limit. 15.May.2021
+#V2.6 works well with 3S LFP Hotwheel Akku pack! 
 #V2.5 7.Feb.2021 modifed to be used for water pump gun controller! 
 #turn off PMOS power output when the water gun is not triggered! 
 #V2.4 3.Feb.2021, add INA260
@@ -23,7 +23,7 @@ INA260_ADDRESS	 = 0x40  #1000000 @ A0,A1=GND
 LM75_ADDRESS	 = 0x48
 LM75_ADDRESS2	 = 0x49
 
-#--------INA260 Reg address---------
+#--------Reg address---------
 INA260_REG_CONFIG = const(0x00)  # CONFIGURATION REGISTER (R/W)
 INA260_REG_CURRENT = const(0x01)  # SHUNT VOLTAGE REGISTER (R)
 INA260_REG_BUSVOLTAGE = const(0x02)  # BUS VOLTAGE REGISTER (R)
@@ -32,27 +32,6 @@ INA260_REG_MASK_ENABLE = const(0x06)  # MASK ENABLE REGISTER (R/W)
 INA260_REG_ALERT_LIMIT = const(0x07)  # ALERT LIMIT REGISTER (R/W)
 INA260_REG_MFG_UID = const(0xFE)  # MANUFACTURER UNIQUE ID REGISTER (R)
 INA260_REG_DIE_UID = const(0xFF)  # DIE UNIQUE ID REGISTER (R)
-TIME_140_us = const(0x0)
-TIME_204_us = const(0x1)
-TIME_332_us = const(0x2)
-TIME_558_us = const(0x3)
-TIME_1_1_ms = const(0x4)
-TIME_2_116_ms = const(0x5)
-TIME_4_156_ms = const(0x6)
-TIME_8_244_ms = const(0x7)
-
-COUNT_1 = const(0x0)
-COUNT_4 = const(0x1)
-COUNT_16 = const(0x2)
-COUNT_64 = const(0x3)
-COUNT_128 = const(0x4)
-COUNT_256 = const(0x5)
-COUNT_512 = const(0x6)
-COUNT_1024 = const(0x7)
-
-INA260_MODE_SHUTDOWN = const(0x0)
-INA260_MODE_TRIGGERED = const(0x3)
-INA260_MODE_CONTINUOUS = const(0x7)
 
 
 
@@ -68,33 +47,20 @@ LM75_CONF_OS_POL 	 = 2
 LM75_CONF_OS_F_QUE 	 = 3
 
 #global para vars
-Current_alert = 1900 # in mA
+Current_alert = 1500 # in mA
 Current_alert_stop = 2500 # in mA
-Current_alert_step = 100 # increase step, in mA
+
+Current_alert3S = 1500  # in mA
+Current_alert4S = 2200  # in mA
+Current_alert3S_stop = 2500 # in mA
+Current_alert4S_stop = 3200 # in mA
+gun_stop_interval_3S = 2000
+gun_stop_interval_4S = 1500
+gun_stop_interval = 2000
 
 T_alert = 35  #in C degree
 T_OS1= (T_alert* 32*8 )
 T_OS1_reg_data = T_OS1.to_bytes(2,'b') 
-
-
-
-
-
-#increase or decrease
-def buttonA_wasPressed():
-  # global params
-  global Current_alert,Current_alert_step
-  rgb.setColorAll(0xccaa55)
-  Current_alert =Current_alert +Current_alert_step
-  if (Current_alert>Current_alert_stop):
-      Current_alert = Current_alert_stop
-  print('Current_alert: '+str(Current_alert)+'mA' )
-  wait_ms(500)
-  rgb.setColorAll(0x000044)
-  pass
-btnA.wasPressed(buttonA_wasPressed)
-
-
 
 #class LM75(object):
 class LM75():
@@ -143,8 +109,8 @@ class LM75():
 		#raw = ((raw << 8) & 0xFF00) + (raw >> 8)
 		return self.toFah(self.regdata2float(raw))
 
-print('ATOM INA260 measurement + water pump gun program v2.6B')
-print('Author: Zell, 3.Feb.2021')
+print('ATOM INA260 measurement + water pump gun program v2.7')
+print('Author: Zell, 15.May.2021')
 tmp_str = None
 Vbus= 0
 Current = 0
@@ -177,6 +143,7 @@ while (Scan_EN):
         print('0x'+'%2x%%'%((addrList[i])))
         if (INA260_ADDRESS == addrList[i]):
            rgb.setColorAll(0xEEEEBB)
+           print('>:INA260 detected!')
            INA_OK = True
            wait_ms(100)
            
@@ -207,33 +174,6 @@ while (Scan_EN):
       rgb.setColorAll(0x000000)
       continue
 print('#>:IIC scan finished, main control starts running')
-#config INA260_reg
-if(INA_OK):
-           i2c0 = i2c_bus.easyI2C(IIC_PORTA, INA260_ADDRESS, freq=100000)
-           print('----INA260-config----')
-           print('----Conversion time: 1.1 ms def----')
-           print('----Averaging mode: 4')
-           config_word = i2c0.read_reg(INA260_REG_CONFIG, 2)
-           config_def = int.from_bytes(config_word, False) 
-           print('----Default config value: '+bin(config_def))
-           tmp_config=INA260_MODE_CONTINUOUS+(TIME_2_116_ms<<3)+(TIME_1_1_ms<<6)+(COUNT_4<<9)+(6<<12)
-           config_bytes = bytearray(2)
-           config_bytes = int.to_bytes(tmp_config,2,"big")
-           print('----config_bytes   value: '+bin(int.from_bytes(config_bytes, False) ))
-           i2c0.write_u16(INA260_REG_CONFIG, tmp_config, byteorder="big")
-           #i2c0.write_u16(INA260_REG_CONFIG, tmp_config, byteorder="big")
-           #tmp_config = config_def+ (COUNT_4<<9)assssssss
-           #print('----New config reg value: '+bin(tmp_config))
-           wait_ms(10)
-           config_word = i2c0.read_reg(INA260_REG_CONFIG, 2)
-           config_val = int.from_bytes(config_word, False) 
-           print('---readback config value: '+bin(config_val))
-           """
-           ----Default config value: 0b110001011101111
-           ----config_bytes   value: 0b110001101101111
-           ---readback config value: 0b110001011101111
-           """
-
 while 1:
     
     if (gun_stop_cnt>0):
@@ -259,14 +199,14 @@ while 1:
         
 
         #----------OCP-------------
-        #stop gun@ over current
+        #stop gun@ over current, off for 10 seconds
         if (Current>Current_alert_stop):
             digitalWrite(PMOS_gate_pin, 0)
             OUT_EN = False
             print ('#--Stop gun!---#')
             rgb.setColorAll(0xFF1199)
             wait_ms(10000)
-        #start pump
+        #start pump, norma running motor
         if (Current<Current_alert):
             digitalWrite(PMOS_gate_pin, 1)
             OUT_EN = True
@@ -275,15 +215,15 @@ while 1:
             rgb.setColorAll(0x00ff11)
         #stop gun@ not triggered, lightly over current
         else:
-            digitalWrite(PMOS_gate_pin, 0)
+            digitalWrite(PMOS_gate_pin, 0)#turn off gate
             OUT_EN = False
             gun_stop_cnt = gun_stop_cnt+1
-            print ('#--PMOS OFF!---#')
+            print ('#--High curren warning---#')
             print ('#--PMOS OFF!---#')
             print ('#--PMOS OFF!---#')
             print ('#--PMOS OFF!---#')
             rgb.setColorAll(0xFF0000)
-            wait_ms(2000)
+            wait_ms(gun_stop_interval)
            
         Voltage_raw = i2c0.read_reg(INA260_REG_BUSVOLTAGE,2)
         Vbus =  int.from_bytes(Voltage_raw, 'b') #B uint8; b int8;signed 
@@ -353,6 +293,16 @@ while 1:
     sys_cnt = sys_cnt +1
     #wait_ms(50)
     if(sys_cnt%50 ==0):
+       if (Vbus>12):
+         print('<3S LFP akku mode>')
+         Current_alert_stop = Current_alert4S_stop
+         Current_alert = Current_alert4S
+         gun_stop_interval = gun_stop_interval_4S
+       else: 
+         print('<4S LIPO akku mode>')
+         Current_alert_stop = Current_alert3S_stop
+         Current_alert = Current_alert3S
+         gun_stop_interval = gun_stop_interval_3S
        print('Sys run cnt:'+str(sys_cnt))
        rgb.setColorAll(0x000000)
   
@@ -364,6 +314,8 @@ Current_raw: b'\x00\x00'
 Current: 0.0mA
 Vbus: 2.7375V
 Power: 0.0mW
+
 TS1: 17.625C
+
 <Low T>:output activated!
 '''
