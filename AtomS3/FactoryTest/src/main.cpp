@@ -1,3 +1,6 @@
+//Factory test demo for ATOM_S3 unit, modified by Zell
+//V1.1, added MU6886 temp. display
+//last edit 11.1.2023 by Zell, tudzl@hotmail.de
 #include <Arduino.h>
 #include <driver/rmt.h>
 #include <WiFi.h>
