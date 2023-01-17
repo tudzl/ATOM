@@ -1,4 +1,5 @@
 //Factory test demo for ATOM_S3 unit, modified by Zell
+//V1.2 added Fillarc boot animation
 //V1.1, added MU6886 temp. display
 //last edit 11.1.2023 by Zell, tudzl@hotmail.de
 #include <Arduino.h>
@@ -131,6 +132,24 @@ static LGFX_Sprite sprite4(&lcd);
 static I2C_MPU6886 imu(I2C_MPU6886_DEFAULT_ADDRESS, Wire);
 static led_strip_t *strip       = NULL;
 static ir_builder_t *ir_builder = NULL;
+static uint8_t Screen_center_x = 128/2;
+static uint8_t Screen_center_y = 128/2;
+static uint8_t circle_r = 16;
+
+
+
+uint32_t circle_color_list[8] = {0xcc3300, 0xff6633, 0xffff66, 0x33cc33,
+                                 0x00ffff, 0x0000ff, 0xff3399, 0x990099};
+static void boot_animation(void) {
+    for (size_t c = 0; c < 8; c++) {
+        lcd.fillArc(0, lcd.height(), c * 23, (c + 1) * 23, 270, 0,
+                           circle_color_list[c]);
+        delay(200);
+    }
+}
+
+
+
 
 void setup() {
     USBSerial.begin(115200);
@@ -181,8 +200,8 @@ void setup() {
         lcd.setTextWrap(false);
         lcd.setTextColor(TFT_WHITE);
 
-        lcd.clear(TFT_DARKGRAY);
-        delay(2000);       
+        boot_animation();
+    
         lcd.clear(TFT_WHITE);
         delay(2000);
         lcd.clear(TFT_RED);
@@ -195,7 +214,22 @@ void setup() {
         delay(2000);  
         lcd.clear(TFT_BLACK);
         delay(1000);
+        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r,TFT_GOLD); //( x, y      , r, color);
+        delay(300);
+        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r*2,TFT_GREENYELLOW); //( x, y      , r, color);
+        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r,TFT_GOLD); //( x, y      , r, color);
+        delay(300);
+        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r*3,TFT_SKYBLUE); //( x, y      , r, color);
+        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r*2,TFT_GREENYELLOW); //( x, y      , r, color);
+        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r,TFT_GOLD); //( x, y      , r, color);
+        delay(400);
+        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r*4,TFT_PINK); //( x, y      , r, color);
+        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r*3,TFT_SKYBLUE); //( x, y      , r, color);
+        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r*2,TFT_GREENYELLOW); //( x, y      , r, color);
+        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r,TFT_GOLD); //( x, y      , r, color);
+        delay(2000);
 
+        lcd.clear(TFT_BLACK);
         lcd.drawCenterString("ATOM S3 LCD", 64, 1);
         lcd.setCursor(25, 16);
         lcd.printf("%08X", ir_addr);
