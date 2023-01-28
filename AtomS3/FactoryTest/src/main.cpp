@@ -1,8 +1,12 @@
 //Factory test demo for ATOM_S3 unit, modified by Zell
+//V1.4 added BLE sensor broadcast test mode, sensor mac:'A4:C1:38:47:AA:D9'  model:'LYWSD03MMC'    
+//V1.3 added fire flame loop code(based on fiery.ino), 18.Jan.2023
 //V1.2 added Fillarc boot animation
 //V1.1, added MU6886 temp. display
-//last edit 11.1.2023 by Zell, tudzl@hotmail.de
+//last edit 18.1.2023 by Zell, tudzl@hotmail.de
+//Original code is from m5stack official release for factory test code
 #include <Arduino.h>
+#include <M5AtomS3L.h>
 #include <driver/rmt.h>
 #include <WiFi.h>
 #include <Wire.h>
@@ -15,9 +19,13 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
+//added by zell to test Mijia sensors
+#include <BLEScan.h>
+#include <BLEAdvertisedDevice.h>
 
 #define LGFX_USE_V1
 #include "LovyanGFX.hpp"
+#include <sstream>
 
 #define DEVICE_NAME         "ATOM-S3"
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -83,6 +91,129 @@ class M5ATOMS3_GFX : public lgfx::LGFX_Device {
     }
 };
 
+#define SCAN_TIME  10 //BLE扫描的间隔10秒
+boolean METRIC = true; //不需要公制单位的话设为：false 
+BLEScan *pBLEScan;
+float  current_humidity = -100;
+float  previous_humidity = -100;
+float current_temperature = -100;
+float previous_temperature = -100;
+float CelciusToFahrenheit(float Celsius);
+String convertFloatToString(float f);
+
+boolean BLE_broadcast_debug_mode_EN = false;
+
+class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
+    void onResult(BLEAdvertisedDevice advertisedDevice)
+    {
+        if(BLE_broadcast_debug_mode_EN)
+            USBSerial.printf("\n\nAdvertised Device: %s\n", advertisedDevice.toString().c_str());
+      if (advertisedDevice.haveName() && advertisedDevice.haveServiceData() && !advertisedDevice.getName().compare("LYWSD03MMC")) {
+        std::string strServiceData = advertisedDevice.getServiceData();
+        uint8_t cServiceData[100];
+        char charServiceData[100];
+
+        strServiceData.copy((char *)cServiceData, strServiceData.length(), 0);
+
+        USBSerial.printf("\n\nAdvertised Device_%s\n", advertisedDevice.toString().c_str());
+        USBSerial.printf("msg:%s \r\n", advertisedDevice.getServiceData().c_str());
+
+        for (int i = 0; i < strServiceData.length(); i++) {
+          sprintf(&charServiceData[i * 2], "%02x", cServiceData[i]);
+        }
+        
+        std::stringstream ss;
+        //not used
+       // ss << "fe95" << charServiceData;
+       ss << charServiceData;
+
+       USBSerial.print("Payload:");
+       USBSerial.println(ss.str().c_str());
+
+        char eventLog[256];
+        unsigned long value, value2;
+        char charValue[5] = {0,};
+        //test decode
+         sprintf(charValue, "%02X%02X", cServiceData[15], cServiceData[14]);
+            value = strtol(charValue, 0, 16);
+            if (METRIC)
+            {
+              current_temperature = (float)value / 10;
+            } else
+            {
+              current_temperature = CelciusToFahrenheit((float)value / 10);
+            }
+           USBSerial.printf("TEMPERATURE_EVENT:");
+           USBSerial.printf(charValue, value);
+           USBSerial.println();
+
+
+
+
+
+
+        //5th and 21th
+        switch (cServiceData[4]) {
+          case 0x04:
+            sprintf(charValue, "%02X%02X", cServiceData[15], cServiceData[14]);
+            value = strtol(charValue, 0, 16);
+            if (METRIC)
+            {
+              current_temperature = (float)value / 10;
+            } else
+            {
+              current_temperature = CelciusToFahrenheit((float)value / 10);
+            }
+            break;
+          case 0x09:
+            sprintf(charValue, "%02X%02X", cServiceData[15], cServiceData[14]);
+            value = strtol(charValue, 0, 16);
+            current_humidity = (float)value / 10;
+           USBSerial.printf("HUMIDITY_EVENT:");
+           USBSerial.printf(charValue, value);
+           USBSerial.println();
+            break;
+          case 0x17: //0x16
+            sprintf(charValue, "%02X", cServiceData[14]);
+            value = strtol(charValue, 0, 16);
+           USBSerial.printf("BATTERY_EVENT:");
+           USBSerial.printf(charValue, value);
+           USBSerial.println();
+            break;
+          case 0x16:
+            sprintf(charValue, "%02X%02X", cServiceData[15], cServiceData[14]);
+            value = strtol(charValue, 0, 16);
+            if (METRIC)
+            {
+              current_temperature = (float)value / 10;
+            } else
+            {
+              current_temperature = CelciusToFahrenheit((float)value / 10);
+            }
+           USBSerial.printf("TEMPERATURE_EVENT:");
+           USBSerial.printf(charValue, value);
+           USBSerial.println();
+            sprintf(charValue, "%02X%02X", cServiceData[17], cServiceData[16]);
+            value2 = strtol(charValue, 0, 16);
+            current_humidity = (float)value2 / 10;
+           USBSerial.printf("HUMIDITY_EVENT:" );
+           USBSerial.printf(charValue, value2);
+           USBSerial.println();
+            break;
+        }
+      }
+    }
+};
+
+void initBluetooth_BLE()
+{
+  BLEDevice::init("");
+  pBLEScan = BLEDevice::getScan(); //create new scan
+  pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+  pBLEScan->setActiveScan(true); //active scan uses more power, but get results faster
+  pBLEScan->setInterval(60);
+  pBLEScan->setWindow(48);
+}
 #include "cube.hpp"
 
 extern const unsigned char ATOMS3[];
@@ -92,8 +223,11 @@ static void update_neopixel(uint8_t r, uint8_t g, uint8_t b);
 static void ir_tx_init(void);
 static void ir_tx_test(void);
 static void ble_task(void *);
+static void ble_task2(void *);
 static void wifi_task(void *);
-
+static void BLE_Sensor_task(void *);
+uint8_t WIFI_EN = 0;
+uint8_t BT_EN = 0;
 static uint8_t device_type              = DEV_UNKNOWN;
 static uint8_t atom_s3_gpio_list[8]     = {14, 17, 36, 37, 38, 39, 40, 42};
 static uint8_t atom_s3_lcd_gpio_list[6] = {14, 17, 36,
@@ -107,6 +241,7 @@ static time_t last_wifi_scan_time       = 0;
 
 static bool btn_pressd_flag = true;
 static int btn_pressd_count = 0;
+uint8_t delay_cnt = 1;
 
 static uint32_t ir_addr       = 0x00;
 static uint8_t ir_cmd         = 0x20;
@@ -123,12 +258,14 @@ static uint32_t neopixel_color_list[] = {0xFF0000, 0x00FF00, 0x0000FF, 0xFFFFFF,
                                          0x000000};
 static uint8_t mac_addr[6];
 static char name_buffer[24];
+static char PW_buffer[8];
 
 static M5ATOMS3_GFX lcd;
 static LGFX_Sprite sprite1(&lcd);
 static LGFX_Sprite sprite2(&lcd);
 static LGFX_Sprite sprite3(&lcd);
 static LGFX_Sprite sprite4(&lcd);
+static LGFX_Sprite sprite_fullcreen(&lcd);
 static I2C_MPU6886 imu(I2C_MPU6886_DEFAULT_ADDRESS, Wire);
 static led_strip_t *strip       = NULL;
 static ir_builder_t *ir_builder = NULL;
@@ -141,18 +278,245 @@ static uint8_t circle_r = 16;
 uint32_t circle_color_list[8] = {0xcc3300, 0xff6633, 0xffff66, 0x33cc33,
                                  0x00ffff, 0x0000ff, 0xff3399, 0x990099};
 static void boot_animation(void) {
+   
     for (size_t c = 0; c < 8; c++) {
         lcd.fillArc(0, lcd.height(), c * 23, (c + 1) * 23, 270, 0,
                            circle_color_list[c]);
-        delay(200);
+        delay(300);
     }
+    
+
+    for (uint8_t i = 0; i < 10; i++){
+        if (digitalRead(BTN_GPIO) == LOW) {
+             delay(5);
+        if (digitalRead(BTN_GPIO) == LOW) {
+             delay_cnt++;
+        }
+        delay(45);
+
+    }//500ms
+
+    }
+    //addtional 2 to 20 s delay
+    USBSerial.printf("Total logo show delay with %d seconds\r\n", delay_cnt*2);
+    delay(delay_cnt*2000); //need improve
 }
 
+//Fire Flame vars and functions
+#define MAXPAL 4
+
+//128*128=16384
+uint16_t matrix[16384 + 128]; //why? addtional pixels to heat up bottom pixels.
+uint16_t backBuffer565[16384];
+uint16_t color[200 * (MAXPAL + 1)]; // 4 palettes and current pallet space.87,   4 color modes of Flames
+uint8_t pallet = 1;
+uint8_t maxPal = 0;
+uint32_t XORRand = 0;
+
+// A standard XOR Shift PRNG but with a floating point twist.
+// https://www.doornik.com/research/randomdouble.pdf
+float random2(){
+  XORRand ^= XORRand << 13;
+  XORRand ^= XORRand >> 17;
+  XORRand ^= XORRand << 5;
+  return (float)((float)XORRand * 2.32830643653869628906e-010f);
+}
+
+void makePallets(){
+  // 0b00011111 00000000 : blue
+  // 0b00000000 11111000 : red
+  // 0blll00000 00000hhh : green
+  // Flame effect pallet
+  for (int i = 0; i < 64; i++){
+    uint8_t r = i * 4;
+    uint8_t g = 0;
+    uint8_t b = 0;
+    color[200 + i] = ((b & 0b11111000) << 8) | ((g & 0b11111100) << 3) | (r >> 3);
+    r = 255;
+    g = i * 4;
+    b = 0;
+    color[200 + i + 64] = ((b & 0b11111000) << 8) | ((g & 0b11111100) << 3) | (r >> 3);
+    r = 255;
+    g = 255;
+    b = i * 2;
+    color[200 + i + 128] = ((b & 0b11111000) << 8) | ((g & 0b11111100) << 3) | (r >> 3);
+  }
+  uint8_t r = 255;
+  uint8_t g = 255;
+  uint8_t b = 64 * 2;
+  for (int i = 192; i < 200; i++){
+    color[200 + i] = ((b & 0b11111000) << 8) | ((g & 0b11111100) << 3) | (r >> 3);
+  }   
+  // Cold flame effect pallet
+  for (int i = 0; i < 200; i++){
+    uint8_t r = (i > 100) ? (float)(i-100) * 1.775f: i / 3.0f;
+    uint8_t g = (i > 100) ? (float)(i-100) * 1.775f: i / 3.0f;
+    uint8_t b = (float)i * 1.275f;
+    color[400 + i] = ((b & 0b11111000) << 8) | ((g & 0b11111100) << 3) | (r >> 3);
+  }
+  // Black and white pallet
+  for (int i = 0; i < 200; i++){
+    uint8_t r = (float)i * 1.275f;
+    uint8_t g = (float)i * 1.275f;
+    uint8_t b = (float)i * 1.275f;
+    color[600 + i] = ((b & 0b11111000) << 8) | ((g & 0b11111100) << 3) | (r >> 3);
+  }
+  // Green flame effect pallet
+  for (int i = 0; i < 200; i++){
+    uint8_t r = (i > 100) ? (float)(i-100) * 1.175f: i / 5.0f;
+    uint8_t g = (float)i * 1.275f;
+    uint8_t b = (i > 100) ? (float)(i-100) * 1.775f: i / 3.0f;
+    color[800 + i] = ((b & 0b11111000) << 8) | ((g & 0b11111100) << 3) | (r >> 3);
+  }
+}
+
+void usePalette(uint8_t pal){
+  uint16_t palOffset = pal * 200;
+  for(uint16_t i = 0; i < 200; i++){
+    color[i] = color[palOffset + i];
+  }
+}
+
+void prevPal(){
+  if(--pallet == 0) pallet = MAXPAL;
+  usePalette(pallet);
+}
+
+void nextPal(){
+  if(++pallet == MAXPAL + 1) pallet = 1;
+  usePalette(pallet);
+}
+
+void Flame_init(){
+
+  M5.begin(true, true, false, false);// bool LCDEnable, bool USBSerialEnable, bool I2CEnable, bool LEDEnable
+  USBSerial.println("");
+  USBSerial.println("M5AtomS3 Flame app init...");
+  USBSerial.println("");
+  XORRand = esp_random();
+  makePallets();
+  usePalette(1);
+  WiFi.disconnect();
+
+
+  sprite3.clear();
+  sprite3.setCursor(0, 0);
+  sprite3.setTextSize(2);
+  sprite3.setTextColor(TFT_SKYBLUE);
+  sprite3.printf("Atom Flame Mode!\r\n");
+  sprite3.pushSprite(0, 0); 
+
+  /*
+  //test
+  //sprite1.deletePalette();
+  sprite1.createSprite(128,128);
+  sprite1.setTextWrap(true);
+  sprite1.setTextSize(2);
+  sprite1.setTextColor(TFT_SKYBLUE);
+  sprite1.printf(" Atom Flame Mode!\r\n");
+  sprite1.pushSprite(0, 0); 
+
+    */
+  sprite1.deleteSprite();
+  sprite2.deleteSprite();
+  //sprite3.deleteSprite();
+  sprite4.deleteSprite();
+
+  /*
+
+   sprite_fullcreen.setColorDepth(16);
+   sprite_fullcreen.createSprite(128, 128);
+        sprite_fullcreen.setTextWrap(false);
+        sprite_fullcreen.setTextScroll(false);
+        sprite_fullcreen.setTextSize(1.3);
+        sprite_fullcreen.setTextColor(TFT_SKYBLUE);
+  lcd.setCursor(0,0);
+
+    sprite_fullcreen.setCursor(0, 0);
+    sprite_fullcreen.clear();
+    sprite_fullcreen.printf(" Atom Flame Mode!\r\n");
+    //sprite_fullcreen.clear();
+    sprite_fullcreen.pushSprite(0,0);
+    */
+    delay(500);
+}
+
+
+void Flame_APP_loop(){
+  //M5.update();
+  uint8_t palette_height = 108; //127,128 not working,104 ok, RAM issue?
+  sprite3.createSprite(128, palette_height);
+  sprite3.clear();
+  sprite3.pushSprite(0, 128-palette_height); 
+  USBSerial.printf("Created 128*%d sprite! \r\n",palette_height);
+
+  uint16_t pixel_len = 128*palette_height;
+  uint16_t pixel_start = 16384 -pixel_len;
+  while(1){
+
+    sprite3.clear();
+    sprite3.setCursor(0, 0);
+
+
+    //not working
+    //if (M5.Btn.wasReleased()) {
+    //if (M5.Btn.wasPressed()) {
+
+    //    nextPal();
+   // }
+    //press Btn to switch Palette/color
+    if (digitalRead(BTN_GPIO) == LOW) {
+             delay(5);
+        if (digitalRead(BTN_GPIO) == LOW) {
+             nextPal();
+        }
+    }
+    // Heat up the bottom of the fire.
+    for (uint16_t i = 16384; i < 16384 + 127; i++) {
+        matrix[i] = 300.0f * random2();
+    }
+    // Nasty floating point maths to produce the billowing and nice blending.
+    // Floats are accelerated on the ESP32 S3.
+    for (uint16_t i = 0; i < 16384; i++) {
+        uint16_t pixel = (float)i + 128.0f - random2() + 0.8f;
+        float sum = matrix[pixel] + matrix[pixel + 1] + matrix[pixel - 128] + matrix[pixel - 128 + 1];
+        uint16_t value = sum * 0.49f * random2() + 0.5f;
+        matrix[i] = value;
+        if(value > 199) value = 199;
+        backBuffer565[i] = color[value];
+        //lcd.drawPixel 
+    }
+    // M5.Lcd.drawBitmap(0, 0, 128, 128, backBuffer565);
+     /*
+    
+    sprite_fullcreen.clear();
+    sprite_fullcreen.pushSprite(0,0);
+    sprite_fullcreen.setCursor(0,0);
+        */
+    //sprite3.writePixels(backBuffer565, 16384/2, false );//(pixelcopy_t* param, uint32_t len, bool use_dma) override;
+    //sprite3.pushSprite(0, 64); 
+    Lcd.pushPixels(backBuffer565, pixel_len); //works ok for current sprite!
+    //Lcd.pushPixels(backBuffer565, 16384);//issue: only draw in current sprite(1 to 4) window
+    //Lcd.pushPixelsDMA(backBuffer565, 16384);//issue: only draw in current sprite window
+    //sprite_fullcreen.pushSprite(0,0);
+    //lcd.setCursor(0,0);
+    //Lcd.writePixels(backBuffer565, 16384,0); //issue here!
+    //lcd.writePixelsDMA
+    //lcd.pushPixels  
+    //lcd.pushPixelsDMA
+    //    LGFX_INLINE_T void writePixels(const T*        data, int32_t len           )
+    //void drawBitmap (int32_t x, int32_t y, const uint8_t* bitmap, int32_t w, int32_t h, const T& color                    )
+    //Lcd.drawBitmap(0, 0, 128, 128, backBuffer565);
+     delay(10);
+  }
+}
 
 
 
 void setup() {
     USBSerial.begin(115200);
+    USBSerial.println("M5AtomS3 intial version, FW build date: 18.Jan.2023 by Zell");
+    USBSerial.println("M5AtomS3 Factory Test demo V1.2 is booting...");
     esp_efuse_mac_get_default(mac_addr);
     ir_addr = (mac_addr[2] << 24) | (mac_addr[3] << 16) | (mac_addr[4] << 8) |
               mac_addr[5];
@@ -200,18 +564,21 @@ void setup() {
         lcd.setTextWrap(false);
         lcd.setTextColor(TFT_WHITE);
 
-        boot_animation();
+        boot_animation();//added by Zell
     
+        
         lcd.clear(TFT_WHITE);
-        delay(2000);
-        lcd.clear(TFT_RED);
-        delay(2000);
-        lcd.clear(TFT_GREEN);
-        delay(2000);
-        lcd.clear(TFT_BLUE);
-        delay(2000);
-        lcd.clear(TFT_ORANGE);
-        delay(2000);  
+        delay(1000);
+        if(WIFI_EN){
+            lcd.clear(TFT_RED);
+            delay(1000);
+            lcd.clear(TFT_GREEN);
+            delay(1000);
+            lcd.clear(TFT_BLUE);
+            delay(1000);
+            lcd.clear(TFT_ORANGE);
+            delay(1000);  
+        }
         lcd.clear(TFT_BLACK);
         delay(1000);
         lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r,TFT_GOLD); //( x, y      , r, color);
@@ -223,11 +590,11 @@ void setup() {
         lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r*2,TFT_GREENYELLOW); //( x, y      , r, color);
         lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r,TFT_GOLD); //( x, y      , r, color);
         delay(400);
-        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r*4,TFT_PINK); //( x, y      , r, color);
+        lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r*4,TFT_PINK_L); //( x, y      , r, color);
         lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r*3,TFT_SKYBLUE); //( x, y      , r, color);
         lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r*2,TFT_GREENYELLOW); //( x, y      , r, color);
         lcd.fillCircle(Screen_center_x,Screen_center_y,circle_r,TFT_GOLD); //( x, y      , r, color);
-        delay(2000);
+        delay(delay_cnt*2000);
 
         lcd.clear(TFT_BLACK);
         lcd.drawCenterString("ATOM S3 LCD", 64, 1);
@@ -250,7 +617,8 @@ void setup() {
         sprite2.setTextColor(TFT_GREEN);
 
         sprite3.setColorDepth(16);
-        sprite3.createSprite(128, 32);
+        //sprite3.createSprite(128, 32);//Ori
+        sprite3.createSprite(128, 48); //128,64 crashes
         sprite3.setTextWrap(false);
         sprite3.setTextScroll(false);
         sprite3.setTextSize(1.3);
@@ -276,14 +644,47 @@ void setup() {
     // gpio_reset_pin((gpio_num_t)IR_GPIO);
     // pinMode(IR_GPIO, OUTPUT);
     // digitalWrite(IR_GPIO, HIGH);
+    if(2<delay_cnt){ 
+         USBSerial.println("#>Wifi and BLuetooth disabled!");
+         USBSerial.println("#>:BLE sensor scan mode enabled!");
+         initBluetooth_BLE();
 
-    // BLE
-    xTaskCreatePinnedToCore(ble_task, "ble_task", 4096 * 8, NULL, 1, NULL,
+         delay(500);
+         //xTaskCreatePinnedToCore(BLE_Sensor_task, "BLE_Sensor_task", 4096 * 8, NULL, 1, NULL,  APP_CPU_NUM);
+         USBSerial.println("#>:Init BLuetooth ! (mode 2)");
+
+         WIFI_EN =0;
+         BT_EN =1;
+    
+     }
+
+    else if (1<delay_cnt){ 
+         USBSerial.println("#>Wifi and BLuetooth disabled!");
+         USBSerial.println("#>:BLE sensor scan mode enabled!  (mode 1) ");
+         initBluetooth_BLE();
+
+         delay(500);
+         xTaskCreatePinnedToCore(BLE_Sensor_task, "BLE_Sensor_task", 4096 * 8, NULL, 1, NULL,
+                            APP_CPU_NUM);
+         USBSerial.println("#>:Created xTask:   BLE_Sensor_task @ APP_core_1!");
+
+         WIFI_EN =0;
+         BT_EN =1;
+    
+     }
+
+    else{ 
+    // BLE //include BT init
+    USBSerial.println("#>Wifi  disabled!");
+        xTaskCreatePinnedToCore(ble_task2, "ble_task2", 4096 * 8, NULL, 1, NULL,
                             APP_CPU_NUM);
 
     // WIFI
-    xTaskCreatePinnedToCore(wifi_task, "wifi_task", 4096 * 8, NULL, 1, NULL,
-                            APP_CPU_NUM);
+        //xTaskCreatePinnedToCore(wifi_task, "wifi_task", 4096 * 8, NULL, 1, NULL, PRO_CPU_NUM);
+        WIFI_EN =1;
+        BT_EN =1;
+        USBSerial.println("#>Created xTask: BLuetooth ble_task2 @ APP_core_1!(default mode)");
+    }
 }
 
 void loop() {
@@ -301,6 +702,14 @@ void loop() {
         while (digitalRead(BTN_GPIO) == LOW) {
         }
     }
+ /*
+    //BLE sensor test:
+    USBSerial.printf("Start BLE scan for %d seconds...\n", SCAN_TIME);
+    BLEScanResults foundDevices = pBLEScan->start(SCAN_TIME);
+    int BLE_dev_count = foundDevices.getCount();
+    printf("Found device count : %d\n", BLE_dev_count);
+
+*/
 
     if (btn_pressd_flag) {
         update_neopixel(
@@ -313,7 +722,7 @@ void loop() {
             sprite1.clear();
             sprite1.printf("BTN Pressed %d\r\nRGB -> %s\r\n", btn_pressd_count,
                            neopixel_color_name[neopixel_color_index]);
-            sprite1.pushSprite(0, 38);
+            sprite1.pushSprite(0, 38); //sprite1 location at screen(0,38)
         }
         USBSerial.printf("BTN Pressed %d\r\nRGB -> %s\r\n", btn_pressd_count,
                          neopixel_color_name[neopixel_color_index]);
@@ -385,6 +794,14 @@ void loop() {
         }
         USBSerial.printf("IR Send >>> addr:%02X cmd:%02X\r\n", ir_addr, ir_cmd);
         last_ir_send_time = millis();
+    }
+
+    //flame app
+    if (btn_pressd_count>5){
+        USBSerial.printf(">: Btn pressed >5, Entering Fire Flame app now..."); 
+        Flame_init();
+        delay(100);
+        Flame_APP_loop();
     }
 
     delay(10);
@@ -465,6 +882,44 @@ static void ir_tx_test(void) {
     ESP_ERROR_CHECK(ir_builder->get_result(ir_builder, &ir_items, &ir_length));
     rmt_write_items(IR_RMT_TX_CHANNEL, ir_items, ir_length, false);
 }
+static void BLE_Sensor_task(void *) {
+
+
+    USBSerial.printf("Start BLE scan for %d seconds...\n", SCAN_TIME);
+    BLEScanResults foundDevices = pBLEScan->start(SCAN_TIME);
+    int BLE_dev_count = foundDevices.getCount();
+    printf("#>::BLE Found device count : %d\n", BLE_dev_count);
+    pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
+
+}
+
+//runs ok on xtask app_core
+static void ble_task2(void *) {
+  BLEDevice::init("name_buffer");
+  pBLEScan = BLEDevice::getScan(); //create new scan
+  pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+  pBLEScan->setActiveScan(true); //active scan uses more power, but get results faster
+  pBLEScan->setInterval(0x50);
+  pBLEScan->setWindow(0x30);// less or equal setInterval value
+
+    static char buffer[64] = {0};
+
+    size_t ble_count = 0;
+    while (1) {
+        if (millis() - last_ble_change_time > 2000) {
+            ble_count++;
+            // sprintf(buffer, "Hello world from %s! %d", DEVICE_NAME, millis()
+            // / 1000);
+            USBSerial.printf("Start BLE scan for %d seconds...\r\n", SCAN_TIME);
+            BLEScanResults foundDevices = pBLEScan->start(SCAN_TIME);
+            int BLE_dev_count = foundDevices.getCount();
+            printf("#>::BLE Found device count : %d\n", BLE_dev_count);
+            last_ble_change_time = millis();
+            pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
+        }
+        delay(10);
+    }
+}
 
 static void ble_task(void *) {
     BLEDevice::init(name_buffer);
@@ -495,7 +950,7 @@ static void ble_task(void *) {
             // sprintf(buffer, "Hello world from %s! %d", DEVICE_NAME, millis()
             // / 1000);
             sprintf(buffer, "Hello world from %s! %d", DEVICE_NAME, ble_count);
-            pCharacteristic->setValue(buffer);
+            pCharacteristic->setValue(buffer); //BLE broadcast Hello world from
             USBSerial.println("BLE update ok");
             last_ble_change_time = millis();
         }
@@ -505,12 +960,15 @@ static void ble_task(void *) {
 
 static void wifi_task(void *) {
     WiFi.mode(WIFI_MODE_APSTA);
-
-    WiFi.softAP(name_buffer, "88888888");
+    //name and PW
+    sprintf(PW_buffer,"12345678");
+    WiFi.softAP(name_buffer, PW_buffer);
+    //WiFi.softAP(name_buffer, "88888888");
     IPAddress myIP = WiFi.softAPIP();
-    USBSerial.printf("AP:\r\nSSID: %s\r\nPSWD: %s\r\nIP address: ", name_buffer,
-                     "88888888");
+   // USBSerial.printf("AP Mode:\r\nSSID: %s\r\nPSWD: %s\r\nIP address: ", name_buffer,                     "88888888");
+    USBSerial.printf("AP Mode:\r\nSSID: %s\r\nPSWD: %s\r\nIP address: ", name_buffer, PW_buffer);
     USBSerial.println(myIP);
+    delay(2000);
     WiFi.disconnect();
 
     WiFiUDP udp_ap;
@@ -557,4 +1015,25 @@ static void wifi_task(void *) {
         }
         delay(10);
     }
+}
+
+
+String convertFloatToString(float f)
+{
+  String s = String(f, 1);
+  return s;
+}
+
+//转换成华氏的自定义函数
+float CelciusToFahrenheit(float Celsius)
+{
+  float Fahrenheit = 0;
+  Fahrenheit = Celsius * 9 / 5 + 32;
+  return Fahrenheit;
+}
+
+//通过使用属性标记一段代码，IRAM_ATTR我们声明编译后的代码将放置在 ESP32 的内部 RAM (IRAM) 中。
+void IRAM_ATTR resetModule() {
+  ets_printf("reboot\n");
+  esp_restart();
 }
