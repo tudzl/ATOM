@@ -14,7 +14,7 @@
 
 #include "M5AtomS3.h"
 
-#define LCD_EN 0
+#define LCD_EN 1
 
 typedef struct TestVector
 {
@@ -107,9 +107,9 @@ void setup() {
   M5.begin(true, true, true,
              false);  
   if (LCD_EN)           
-     M5.Lcd.printf("BLE AES-128 CCM decipher test\r\n");
+     M5.Lcd.printf("AES-128 CCM decipher test\r\n");
   Serial.begin(115200);
-  Serial.println("LYWSD03MMC decipher test V1.0 supported by Mbedtls");
+  Serial.println("LYWSD03MMC decipher test V1.2 supported by Mbedtls");
   USBSerial.printf("whoAmI() = 0x%02x\n", M5.IMU.whoAmI());
   USBSerial.println("LYWSD03MMC decipher test V1.0 supported by Mbedtls");
 
@@ -179,7 +179,7 @@ void setup() {
 
   mbedtls_ccm_free(ctx);  
 
-  USBSerial.println("-------------test data ends here--------------------------------"); 
+  USBSerial.println("-----------test data decryption ends here---------------------"); 
 }
 
 void loop() {
@@ -195,6 +195,7 @@ void decode(TestVector testVectorCCM){
   char * encoded;
   char * decoded;
   uint16_t value=0;
+  mbedtls_ccm_context* ctx;
 
   USBSerial.println("Original Test vector contents for BLE ADV packet decoding:");
  
@@ -214,7 +215,7 @@ void decode(TestVector testVectorCCM){
  USBSerial.printf("Tag        : %s\n\r", encoded);
   free(encoded);
  USBSerial.println(">:start decoding...");
-  mbedtls_ccm_context* ctx;
+ 
   ctx = (mbedtls_ccm_context*) malloc(sizeof(mbedtls_ccm_context));
   mbedtls_ccm_init(ctx);
   ret = mbedtls_ccm_setkey(ctx,
@@ -247,8 +248,8 @@ void decode(TestVector testVectorCCM){
     } 
   } 
   else {
-   USBSerial.println("-------Decryption successful-----------");
-   if (LCD_EN) 
+   USBSerial.println("-------Decryption loop successful-----------");
+  if (LCD_EN) 
     M5.Lcd.printf("Decryption successful\r\n");
   }
   
@@ -261,7 +262,7 @@ void decode(TestVector testVectorCCM){
   }
 
   
-  /*
+  
   char type_flag = plaintext[0];
   char charValue[5];
   float T_Value,H_Value,Akku_Value;
@@ -297,13 +298,11 @@ void decode(TestVector testVectorCCM){
             break;
     }
 
-  */
-  free(encoded);
+  
+  //free(encoded); //issue here! causing bad heap error reboot!!!
   free(decoded);
   //free(value);
 
-
-
   mbedtls_ccm_free(ctx);  
-  USBSerial.println("Decode process ended!");
+  USBSerial.println("*****Decode process ended!*****");
 }
