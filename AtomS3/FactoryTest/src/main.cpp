@@ -1,4 +1,5 @@
 //Factory test demo for ATOM_S3 unit, modified by Zell
+//V1.5 supported BLE sensor broadcast msg AES-128 CCM decoding, added standalone Thermal_APP_loop, 2.Feb.2023
 //V1.4 added BLE sensor broadcast test mode, sensor mac:'A4:C1:38:47:AA:D9'  model:'LYWSD03MMC'    
 //V1.3 added fire flame loop code(based on fiery.ino), 18.Jan.2023
 //V1.2 added Fillarc boot animation
@@ -15,7 +16,7 @@
 #include <ir_tools.h>
 #include <led_strip.h>
 //#include <MahonyAHRS.h>
-
+#include "AtomS3_AES128.h"
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
@@ -26,6 +27,7 @@
 #define LGFX_USE_V1
 #include "LovyanGFX.hpp"
 #include <sstream>
+
 
 #define DEVICE_NAME         "ATOM-S3"
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -40,6 +42,14 @@
 #define LCD_BACKLIGHT_GPIO 16
 #define BTN_GPIO 41
 #define IMU_ADDR 0x68
+
+
+
+
+//AES
+#define MAX_PLAINTEXT_LEN 64
+#define AES_KEY_SIZE 128
+
 
 enum { DEV_UNKNOWN, ATOM_S3, ATOM_S3_LCD };
 
@@ -91,67 +101,213 @@ class M5ATOMS3_GFX : public lgfx::LGFX_Device {
     }
 };
 
-#define SCAN_TIME  10 //BLE扫描的间隔10秒
+//GUI
+static M5ATOMS3_GFX lcd;
+static LGFX_Sprite sprite1(&lcd);
+static LGFX_Sprite sprite2(&lcd);
+static LGFX_Sprite sprite3(&lcd);
+static LGFX_Sprite sprite4(&lcd);
+static LGFX_Sprite sprite_fullcreen(&lcd);
+static I2C_MPU6886 imu(I2C_MPU6886_DEFAULT_ADDRESS, Wire);
+static led_strip_t *strip       = NULL;
+static ir_builder_t *ir_builder = NULL;
+static uint8_t Screen_center_x = 128/2;
+static uint8_t Screen_center_y = 128/2;
+static uint8_t circle_r = 16;
+
+#define SCAN_TIME  6 //BLE扫描的间隔10秒
+#define BLE_AES128
+#define BLE_MAC_Filter 1
+#define BLE_debug_show 0
+boolean BLE_boradcast_listen_EN = true;
 boolean METRIC = true; //不需要公制单位的话设为：false 
 BLEScan *pBLEScan;
-float  current_humidity = -100;
-float  previous_humidity = -100;
-float current_temperature = -100;
-float previous_temperature = -100;
+static float  current_humidity = 0;
+float  previous_humidity = 0;
+boolean T_valid = 0;
+boolean H_valid = 0;
+boolean A_valid = 0;
+boolean thermal_meter_mode = false;
+static float current_temperature = 0;
+float previous_temperature = 0;
+uint8_t sensor_raw_buf[3];
+float Akku_SOC =0; //0-100%
 float CelciusToFahrenheit(float Celsius);
 String convertFloatToString(float f);
-
+char* output_as_hex(unsigned char* a, size_t a_size);
+//boolean BLE_broadcast_debug_mode_EN = true;
 boolean BLE_broadcast_debug_mode_EN = false;
-
+boolean BLE_broadcast_MAC_Filter_EN = true;
+const uint16_t BLE_THA_braodcast_flag = 0x5858; //3058 no use
+uint8_t decode(AES_TestVector testVectorCCM, uint8_t *sensor_raw_val);
 class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice)
     {
-        if(BLE_broadcast_debug_mode_EN)
-            USBSerial.printf("\n\nAdvertised Device: %s\n", advertisedDevice.toString().c_str());
-      if (advertisedDevice.haveName() && advertisedDevice.haveServiceData() && !advertisedDevice.getName().compare("LYWSD03MMC")) {
+        if(BLE_boradcast_listen_EN){
+
+            if( advertisedDevice.haveName()&& BLE_broadcast_debug_mode_EN) {
+                USBSerial.printf("\n\nAdvertised Device: %s\n", advertisedDevice.toString().c_str());
+                USBSerial.println("*********************");
+                }
+            }
+
+        //HUAWEI Band HR-4C8, BAND6
+        if (advertisedDevice.haveName() && !advertisedDevice.getName().compare("HUAWEI Band HR-4C8")) {
+            USBSerial.print("******Band6 heart rate:******");
+            std::string BandServiceData = advertisedDevice.getServiceData();
+            uint8_t cBandServiceData[100];
+            char charBandServiceData[100];
+            BandServiceData.copy((char *)cBandServiceData, BandServiceData.length(), 0);
+            for (int i = 0; i < BandServiceData.length(); i++) {
+            sprintf(&charBandServiceData[i * 2], "%02x", BandServiceData[i]);
+
+            std::stringstream ss_band;
+            ss_band << charBandServiceData; //same as raw data
+            USBSerial.print("Payload:");
+            USBSerial.println(ss_band.str().c_str());
+
+        
+            }
+        }
+
+        if (advertisedDevice.haveName() && advertisedDevice.haveServiceData() && !advertisedDevice.getName().compare("LYWSD03MMC")) {
+            USBSerial.print("\r\n******Temperature/Humidty BLE:******\r\n");
         std::string strServiceData = advertisedDevice.getServiceData();
         uint8_t cServiceData[100];
         char charServiceData[100];
-
+        //advertisedDevice.getServiceData()-->cServiceData-->charServiceData
         strServiceData.copy((char *)cServiceData, strServiceData.length(), 0);
-
-        USBSerial.printf("\n\nAdvertised Device_%s\n", advertisedDevice.toString().c_str());
-        USBSerial.printf("msg:%s \r\n", advertisedDevice.getServiceData().c_str());
 
         for (int i = 0; i < strServiceData.length(); i++) {
           sprintf(&charServiceData[i * 2], "%02x", cServiceData[i]);
         }
-        
+
+        if(BLE_debug_show){
+            USBSerial.printf("Advertised Device_%s\n", advertisedDevice.toString().c_str());
+            //USBSerial.printf("msg:%s \r\n", advertisedDevice.getServiceData().c_str());
+
+        }
+        else {
+            USBSerial.printf("Advertised Device_%s\n", advertisedDevice.getAddress().toString().c_str() ) ;
+        }
+        uint8_t device_fit =0;
+       if (BLE_MAC_Filter){
+            if (advertisedDevice.getAddress().equals(testVectorCCM_D9.MAC) ){
+             USBSerial.printf(">>:Device MAC fit!\r\n");
+             device_fit =1;
+            }
+
+       }
+       
+       if(device_fit){
+        USBSerial.printf("#>:Last sensor T: %4.2f\r\n",current_temperature);
+        USBSerial.printf("#>:Last sensor H: %3.1f\r\n",current_humidity);
+        USBSerial.printf("#>:Last Akku SOC: %4f mV\r\n",Akku_SOC);
         std::stringstream ss;
         //not used
-       // ss << "fe95" << charServiceData;
+       // ss << "fe95" << charServiceData; //ori
+       //ss << "95FE" << charServiceData; //same as raw data  95FE58585b0507d9aa4738c1a475ddeb44a10000000626dfb5
        ss << charServiceData;
-
-       USBSerial.print("Payload:");
-       USBSerial.println(ss.str().c_str());
-
-        char eventLog[256];
+       //Payload:5858 5b05 07 d9aa4738c1a4 75ddeb44a1 000000 0626df b5
+       //                  4                11        16      19    22  
+        USBSerial.print("Payload:"); 
+        USBSerial.println(ss.str().c_str());
+        //char eventLog[256];
         unsigned long value, value2;
-        char charValue[5] = {0,};
-        //test decode
-         sprintf(charValue, "%02X%02X", cServiceData[15], cServiceData[14]);
-            value = strtol(charValue, 0, 16);
-            if (METRIC)
-            {
-              current_temperature = (float)value / 10;
-            } else
-            {
-              current_temperature = CelciusToFahrenheit((float)value / 10);
+        unsigned char charValue[5] = {0,};
+        uint8_t MAC_tag[4];
+        uint16_t payloadtype= 0x0000;
+        uint8_t frame_cnt = 0;
+        uint8_t Ext_cnt [3];
+        //parse msg for decoding vector:
+        payloadtype = (uint16_t) (cServiceData[0]<<8)&0xff00 ;
+        payloadtype+= (uint8_t) cServiceData[1];
+        //USBSerial.printf(">>:payloadtype : %02X, %02X\n\r", cServiceData[0], cServiceData[1]);
+        USBSerial.printf(">>:payloadtype : %04X\r\n", payloadtype);
+        if (BLE_THA_braodcast_flag==payloadtype){
+            USBSerial.printf("\r\n>>:BLE Encripted frame detected:-------------\r\n");
+            frame_cnt = cServiceData[4];
+
+            for(uint8_t idx = 0; idx<5;idx++){
+                charValue[idx]=cServiceData[11+idx];
+                //ciphertext
+                if(idx<4){
+                    MAC_tag[idx]= cServiceData[19+idx];
+                }
+                if(idx<3)
+                    Ext_cnt[idx]= cServiceData[16+idx]; 
+            } 
+            char * encoded;
+            encoded = output_as_hex(charValue, testVectorCCM_D9.datasize); //issue here!!!
+            //encoded = as_hex(testVectorCCM_D9.ciphertext, testVectorCCM_D9.datasize);
+            USBSerial.printf(">>:BLE Cipher  : %s\r\n", encoded);
+            free(encoded);
+            //sprite4.printf("BLE:%02X%02X-%02X%02X%02X%02X%02X", charServiceData[0], charServiceData[1],charValue[0],charValue[1],charValue[2],charValue[3],charValue[4]);
+
+            //pass data to vector
+            testVectorCCM_D9.iv[8]=frame_cnt;
+            for(uint8_t idx = 0; idx<5;idx++){
+                testVectorCCM_D9.ciphertext[idx] = charValue[idx];
+                //ciphertext
+                if(idx<4){
+                    testVectorCCM_D9.tag[idx]=MAC_tag[idx];
+                }
+                if(idx<3)
+                    testVectorCCM_D9.iv[9+idx]=Ext_cnt[idx]; 
+            } 
+        
+            //decode(testVectorCCM_D9);
+            decode(testVectorCCM_D9,sensor_raw_buf);
+            payloadtype = sensor_raw_buf[2]<<8;
+            payloadtype = payloadtype+sensor_raw_buf[1];
+            //for tests
+            
+            if(0x04==sensor_raw_buf[0])
+               T_valid =true;
+            else if(0x06==sensor_raw_buf[0])
+               H_valid =true;
+            else if(0x0A==sensor_raw_buf[0])
+               A_valid =true;
+            /*
+            //USBSerial.printf(">>:proc B\r\n");
+            //current_temperature = (float) (value/100.0);
+            //current_temperature = (float) value;
+            if(T_valid){
+              current_temperature = payloadtype/10.0;
+              T_valid = false;
             }
-           USBSerial.printf("TEMPERATURE_EVENT:");
-           USBSerial.printf(charValue, value);
-           USBSerial.println();
+            if(H_valid){
+              current_humidity = payloadtype/10.0;
+              H_valid = false;
+            }
+            
+            */
+
+            sprite4.clear();
+            sprite4.setCursor(0,0);
+            sprite4.setTextSize(2);
+            sprite4.printf("%3.1fC,%3.1f%%", current_temperature,current_humidity);
+            sprite4.pushSprite(0, 112);
+
+            if(A_valid){
+              Akku_SOC = payloadtype/1000.0;
+              A_valid = false;
+              sprite4.clear();
+              sprite4.setCursor(0,0);
+              sprite4.printf("Akk:%3.1f mV", Akku_SOC);
+              sprite4.pushSprite(0, 16);
+            }
 
 
 
+        }
+        else {
+                USBSerial.printf(">>:NOT a BLE Encripted frame!\n\r");
+        }
 
+       }
 
-
+        /*
         //5th and 21th
         switch (cServiceData[4]) {
           case 0x04:
@@ -201,6 +357,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
            USBSerial.println();
             break;
         }
+        */
       }
     }
 };
@@ -260,20 +417,8 @@ static uint8_t mac_addr[6];
 static char name_buffer[24];
 static char PW_buffer[8];
 
-static M5ATOMS3_GFX lcd;
-static LGFX_Sprite sprite1(&lcd);
-static LGFX_Sprite sprite2(&lcd);
-static LGFX_Sprite sprite3(&lcd);
-static LGFX_Sprite sprite4(&lcd);
-static LGFX_Sprite sprite_fullcreen(&lcd);
-static I2C_MPU6886 imu(I2C_MPU6886_DEFAULT_ADDRESS, Wire);
-static led_strip_t *strip       = NULL;
-static ir_builder_t *ir_builder = NULL;
-static uint8_t Screen_center_x = 128/2;
-static uint8_t Screen_center_y = 128/2;
-static uint8_t circle_r = 16;
 
-
+//void decode(AES_TestVector testVectorCCM);
 
 uint32_t circle_color_list[8] = {0xcc3300, 0xff6633, 0xffff66, 0x33cc33,
                                  0x00ffff, 0x0000ff, 0xff3399, 0x990099};
@@ -503,20 +648,78 @@ void Flame_APP_loop(){
     //Lcd.writePixels(backBuffer565, 16384,0); //issue here!
     //lcd.writePixelsDMA
     //lcd.pushPixels  
-    //lcd.pushPixelsDMA
-    //    LGFX_INLINE_T void writePixels(const T*        data, int32_t len           )
-    //void drawBitmap (int32_t x, int32_t y, const uint8_t* bitmap, int32_t w, int32_t h, const T& color                    )
-    //Lcd.drawBitmap(0, 0, 128, 128, backBuffer565);
      delay(10);
   }
 }
 
+void Thermal_APP_loop(){
+
+  uint8_t Btn_cnt = 0;
+
+
+  //lcd.width();
+        uint8_t palette_height = 100; //127,128 not working,104 ok, RAM issue?
+        uint8_t GUI_T_pos_Y = 8; //127,128 not working,104 ok, RAM issue?
+        uint8_t GUI_T_pos_X = 8; //127,128 not working,104 ok, RAM issue?
+        uint8_t GUI_H_pos_y = palette_height/2-4; 
+        uint8_t GUI_Akku_pos_y = 80; 
+        sprite2.clear();
+        sprite2.setCursor(0, 0);
+        //sprite2.printf("Thermal_Meter\r\n");
+        sprite2.pushSprite(0, 48);
+         lcd.clear(TFT_BLACK);
+         lcd.drawCenterString("BLE Thermal", lcd.width()/2, 1);
+        //lcd.setCursor(25, 16);
+        //lcd.printf("%08X", ir_addr);
+        lcd.drawFastHLine(0, 26, 128);
+        
+    sprite3.createSprite(128, palette_height);
+    sprite3.clear();
+    sprite3.pushSprite(0, 128-palette_height); 
+    USBSerial.printf("Created 128*%d sprite! \r\n",palette_height);
+        
+  while(1){
+
+        //press Btn to switch Palette/color
+    if (digitalRead(BTN_GPIO) == LOW) {
+             delay(5);
+        if (digitalRead(BTN_GPIO) == LOW) {
+             Btn_cnt++;
+        }
+    }
+    if (3<Btn_cnt){
+      USBSerial.printf("#>>:Btn_cnt reached %d, exit Thermal_APP_loop now! \r\n",Btn_cnt);
+      break;
+    }
+
+
+
+    sprite3.setTextColor(TFT_ORANGE);
+    sprite3.setTextSize(3);
+    sprite3.setCursor(GUI_T_pos_X,GUI_T_pos_Y);
+    //sprite3.printf("%4.2f ℃" , current_temperature);
+    sprite3.printf("%4.2f C" , current_temperature);
+   //sprite4.printf("%3.1fC,%3.1f%%", current_temperature,current_humidity);
+
+   sprite3.setTextColor(TFT_SKYBLUE);
+   sprite3.setCursor(GUI_T_pos_X,GUI_H_pos_y);
+   sprite3.printf("%3.1f %%" , current_humidity);
+
+   sprite3.pushSprite(0, lcd.height()-palette_height); 
+   delay(500);//if refresh too fast, will cause LCD flickring
+   }
+
+    
+}
 
 
 void setup() {
     USBSerial.begin(115200);
+    delay(200);
     USBSerial.println("M5AtomS3 intial version, FW build date: 18.Jan.2023 by Zell");
-    USBSerial.println("M5AtomS3 Factory Test demo V1.2 is booting...");
+    delay(200);
+    USBSerial.println("FW last update  date: 2.Feb.2023 by Zell");
+    USBSerial.println("M5AtomS3 Factory Test+BLE demo V1.4 is booting...");
     esp_efuse_mac_get_default(mac_addr);
     ir_addr = (mac_addr[2] << 24) | (mac_addr[3] << 16) | (mac_addr[4] << 8) |
               mac_addr[5];
@@ -597,9 +800,9 @@ void setup() {
         delay(delay_cnt*2000);
 
         lcd.clear(TFT_BLACK);
-        lcd.drawCenterString("ATOM S3 LCD", 64, 1);
-        lcd.setCursor(25, 16);
-        lcd.printf("%08X", ir_addr);
+        lcd.drawCenterString("ATOM S3 BLE", 64, 1);
+        //lcd.setCursor(25, 16);
+        //lcd.printf("%08X", ir_addr);
         lcd.drawFastHLine(0, 31, 128);
 
         sprite1.setColorDepth(16);
@@ -617,8 +820,8 @@ void setup() {
         sprite2.setTextColor(TFT_GREEN);
 
         sprite3.setColorDepth(16);
-        //sprite3.createSprite(128, 32);//Ori
-        sprite3.createSprite(128, 48); //128,64 crashes
+        sprite3.createSprite(128, 32);//Ori
+        //sprite3.createSprite(128, 48); //128,64 crashes
         sprite3.setTextWrap(false);
         sprite3.setTextScroll(false);
         sprite3.setTextSize(1.3);
@@ -628,7 +831,7 @@ void setup() {
         sprite4.createSprite(128, 25);
         sprite4.setTextWrap(false);
         sprite4.setTextScroll(false);
-        sprite4.setTextSize(1.3);
+        sprite4.setTextSize(1.8);
         sprite4.setTextColor(TFT_RED);
 
         // IMU 初始化
@@ -645,13 +848,16 @@ void setup() {
     // pinMode(IR_GPIO, OUTPUT);
     // digitalWrite(IR_GPIO, HIGH);
     if(2<delay_cnt){ 
-         USBSerial.println("#>Wifi and BLuetooth disabled!");
+         USBSerial.println("#>Wifi and BLuetooth enabled!");
          USBSerial.println("#>:BLE sensor scan mode enabled!");
          initBluetooth_BLE();
 
          delay(500);
          //xTaskCreatePinnedToCore(BLE_Sensor_task, "BLE_Sensor_task", 4096 * 8, NULL, 1, NULL,  APP_CPU_NUM);
          USBSerial.println("#>:Init BLuetooth ! (mode 2)");
+        //WIFI
+        xTaskCreatePinnedToCore(wifi_task, "wifi_task", 4096 * 8, NULL, 1, NULL, PRO_CPU_NUM);
+        USBSerial.println("#>:Created xTask: wifi_task @ APP_core_1!");
 
          WIFI_EN =0;
          BT_EN =1;
@@ -663,8 +869,8 @@ void setup() {
          USBSerial.println("#>:BLE sensor scan mode enabled!  (mode 1) ");
          initBluetooth_BLE();
 
-         delay(500);
-         xTaskCreatePinnedToCore(BLE_Sensor_task, "BLE_Sensor_task", 4096 * 8, NULL, 1, NULL,
+         delay(500); //2048+4096=6144
+         xTaskCreatePinnedToCore(BLE_Sensor_task, "BLE_Sensor_task", 6144 * 8, NULL, 1, NULL,
                             APP_CPU_NUM);
          USBSerial.println("#>:Created xTask:   BLE_Sensor_task @ APP_core_1!");
 
@@ -681,13 +887,18 @@ void setup() {
 
     // WIFI
         //xTaskCreatePinnedToCore(wifi_task, "wifi_task", 4096 * 8, NULL, 1, NULL, PRO_CPU_NUM);
-        WIFI_EN =1;
+        WIFI_EN =0;
         BT_EN =1;
         USBSerial.println("#>Created xTask: BLuetooth ble_task2 @ APP_core_1!(default mode)");
     }
 }
 
 void loop() {
+
+
+    // char * encoded;
+      //      encoded = output_as_hex(testVectorCCM_D9.ciphertext, testVectorCCM_D9.datasize);
+     //free(encoded);
     // 按键
     if (digitalRead(BTN_GPIO) == LOW) {
         delay(5);
@@ -787,12 +998,13 @@ void loop() {
     if (millis() - last_ir_send_time > 1000) {
         ir_tx_test();
         if (device_type == ATOM_S3_LCD) {
-            sprite4.setCursor(0, 0);
-            sprite4.clear();
-            sprite4.printf("IR: %02X %02X\r\n", ir_addr, ir_cmd);
-            sprite4.pushSprite(0, 118);
+           // sprite4.setCursor(0, 0);
+            //sprite4.clear();
+            //sprite4.printf("IR: %02X %02X\r\n", ir_addr, ir_cmd);
+            //sprite4.printf("BLE: %02X %02X\r\n", ir_addr, ir_cmd); //Changed to BLE msg , updated in BLE callback loop
+           // sprite4.pushSprite(0, 112);
         }
-        USBSerial.printf("IR Send >>> addr:%02X cmd:%02X\r\n", ir_addr, ir_cmd);
+        //USBSerial.printf("IR Send >>> addr:%02X cmd:%02X\r\n", ir_addr, ir_cmd);
         last_ir_send_time = millis();
     }
 
@@ -803,8 +1015,25 @@ void loop() {
         delay(100);
         Flame_APP_loop();
     }
+    if (3==btn_pressd_count){
+        USBSerial.printf(">: Btn pressed >5, Entering Thermal_meter_mode now..."); 
+        thermal_meter_mode =true;
+        sprite1.clear();
+        sprite1.pushSprite(0, 38);
+        sprite1.deleteSprite();
+        sprite2.clear();
+        sprite2.setCursor(0, 0);
+        sprite2.printf("Thermal_Meter\r\n");
+        sprite2.pushSprite(0, 48);
 
-    delay(10);
+        Thermal_APP_loop();
+
+
+    }
+    
+
+   
+    delay(10);//refresh too fast will cause LCD flickring
 }
 
 static void neopixel_init(void) {
@@ -1037,3 +1266,203 @@ void IRAM_ATTR resetModule() {
   ets_printf("reboot\n");
   esp_restart();
 }
+
+
+
+char* output_as_hex(unsigned char* a, size_t a_size)
+{
+    char* s = (char*) malloc(a_size * 2 + 1);
+    for (size_t i = 0; i < a_size; i++) {
+        sprintf(s + i * 2, "%02X", a[i]);
+    }
+    return s;
+}
+
+uint8_t decode(AES_TestVector testVectorCCM, uint8_t *sensor_raw_val){
+  int ret = 0;
+  uint8_t plaintext[MAX_PLAINTEXT_LEN];
+  char * encoded;
+  char * decoded;
+  //uint16_t value=0;
+  long  value=0;
+  mbedtls_ccm_context* ctx;
+
+  USBSerial.println("Original Test vector contents for BLE ADV packet decoding:");
+ 
+  encoded = output_as_hex(testVectorCCM.key, AES_KEY_SIZE/8);
+  USBSerial.printf("Key        : %s\n\r", encoded);
+  free(encoded);
+  encoded = output_as_hex(testVectorCCM.iv, testVectorCCM.ivsize);
+ USBSerial.printf("Iv         : %s\n\r", encoded);
+  free(encoded);
+  encoded = output_as_hex(testVectorCCM.ciphertext, testVectorCCM.datasize);
+ USBSerial.printf("Cipher     : %s\n\r", encoded);
+  free(encoded);
+  encoded = output_as_hex(testVectorCCM.plaintext, testVectorCCM.datasize);
+ USBSerial.printf("Plaintext  : %s\n\r", encoded);
+  free(encoded);
+  encoded = output_as_hex(testVectorCCM.tag, testVectorCCM.tagsize);
+ USBSerial.printf("Tag        : %s\n\r", encoded);
+  free(encoded);
+ USBSerial.println(">:start decoding...");
+ 
+  ctx = (mbedtls_ccm_context*) malloc(sizeof(mbedtls_ccm_context));
+  mbedtls_ccm_init(ctx);
+  ret = mbedtls_ccm_setkey(ctx,
+    MBEDTLS_CIPHER_ID_AES,
+    testVectorCCM.key,
+    AES_KEY_SIZE
+  );
+  if (ret) {
+   USBSerial.println("CCM setkey failed.");
+  }
+  ret = mbedtls_ccm_auth_decrypt(ctx,
+    testVectorCCM.datasize,
+    testVectorCCM.iv,
+    testVectorCCM.ivsize,
+    testVectorCCM.authdata,
+    testVectorCCM.authsize,
+    testVectorCCM.ciphertext,
+    plaintext,
+    testVectorCCM.tag,
+    testVectorCCM.tagsize 
+  );
+
+  if (ret) {
+    if (ret == MBEDTLS_ERR_CCM_AUTH_FAILED) {
+     USBSerial.println("Authenticated decryption failed.");
+    } else if (ret == MBEDTLS_ERR_CCM_BAD_INPUT) {
+     USBSerial.println("Bad input parameters to the function.");
+    } else if (ret == MBEDTLS_ERR_CCM_HW_ACCEL_FAILED) {
+     USBSerial.println("CCM hardware accelerator failed."); 
+    } 
+  } 
+  else {
+   USBSerial.println("-------Decryption loop successful-----------");
+   ret =1;
+  //if (LCD_EN)
+  //  M5.Lcd.printf("Decryption successful\r\n");
+  }
+  
+  decoded = output_as_hex(plaintext, testVectorCCM.datasize);// (text, 5), issue for Akku info(4bytes)?
+
+  USBSerial.printf("Plaintext : %s\r\n", decoded);
+  //if (LCD_EN) {
+  //  M5.Lcd.printf("Plaintext :\n\r");
+  //  M5.Lcd.printf("%s\n\r",decoded);
+ // }
+  free(decoded);
+  
+  
+  uint8_t type_flag = plaintext[0];
+  uint16_t value_tmp =0;
+  char SensorValue[5];
+  //float T_Value,H_Value,Akku_Value;
+  sensor_raw_val[0]=type_flag;
+  sensor_raw_val[1]=plaintext[3];
+  sensor_raw_val[2]=plaintext[4];
+  
+  USBSerial.printf(">>:Now calc Sesnor values...\r\n");
+  //Arduino test ok, but platformIO hex, crash after USBSerial.printf(">>:proc B\r\n");
+    switch (type_flag) {
+          case 0x04: //T
+            USBSerial.printf(">>:case 0x04");//debug only
+            sprintf(SensorValue, "%02X%02X", (char) plaintext[4], (char) plaintext[3]);
+            USBSerial.printf(">>:proc A\r\n");
+            value = strtol(SensorValue, 0, 16);// issue here
+            value_tmp = plaintext[4]<<8;
+            value_tmp = value_tmp+plaintext[3];
+            USBSerial.printf(">>:proc B\r\n");
+            //current_temperature = (float) (value/100.0);
+            //current_temperature = (float) value;
+            current_temperature= (float) value_tmp;
+            USBSerial.printf(">>:proc C\r\n");
+            current_temperature =current_temperature/10.0;//issue here?, xtask on different core?
+            //USBSerial.printf(">:current_temperature: %5.2f\r\n",value_tmp/10);////issue here!,
+              //current_temperature = (float)value / 10;
+            //current_temperature=T_Value;
+            break;
+          case 0x06: //Hum
+            USBSerial.printf(">>:case 0x06");//debug only
+            sprintf(SensorValue, "%02X%02X", plaintext[4], plaintext[3]);
+            USBSerial.printf(">>:proc A\r\n");//debug only
+            value = strtol(SensorValue, 0, 16);
+            USBSerial.printf(">>:proc B\r\n");
+            current_humidity =  (float)value;
+            current_humidity = current_humidity/(float)10;//issue here!
+            USBSerial.printf(">>:proc C\r\n");
+            
+            //USBSerial.printf(">:current_Humidty: %3.1f %%\r\n",value_tmp/10);
+            //current_humidity=H_Value;
+            break;
+          case 0x0A://Akku
+            USBSerial.printf(">>:case 0x0A");
+            sprintf(SensorValue, "%02X%02X", plaintext[4], plaintext[3]);
+            value = strtol(SensorValue, 0, 16);
+            Akku_SOC =  (float)value;
+            Akku_SOC = Akku_SOC/1000.0;
+            
+            //USBSerial.printf(">:current_akku: %4.3f\r\n",Akku_SOC);
+            //Akku_SOC = Akku_Value;
+            break;
+
+          default: 
+             USBSerial.printf(">:undefined sensor value..."); 
+    }
+    USBSerial.printf(">>:Switch end\r\n"); //debug only
+
+  
+  //free(encoded); //issue here! causing bad heap error reboot!!!
+ 
+  //free(value);
+
+  mbedtls_ccm_free(ctx);  
+  USBSerial.println("*****Decode process ended!*****");
+  return ret;
+  
+}
+
+
+
+/*
+
+Payload:58585b05aad9aa4738c1a461e41a149a060000fe8fc1e6
+>>:payloadtype : 5858
+
+
+>>:BLE Encripted frame detected:-------------
+>>:BLE Cipher  : 61E41A149A
+
+Original Test vector contents for BLE ADV packet decoding:
+Key        : 7B67F5AD19AE233C02993BC94B70D07F
+
+Iv         : D9AA4738C1A45B05AA060000
+
+Cipher     : 61E41A149A
+
+Plaintext  : 061002F001
+
+Tag        : FE8FC1E6
+
+>:start decoding...
+-------Decryption loop successful-----------
+Plaintext : 0610023802
+>>:Now calc Sesnor values...
+>>:case 0x06>>:proc A
+>>:proc B
+>>:proc C
+
+ //test for decode func:
+            char SensorValue[2]={0x00,0x83};
+
+            //uint16_t value = strtol(SensorValue, 0, 16);// issue here
+            uint16_t valuetmp = SensorValue[0]<<8;
+            valuetmp = valuetmp+SensorValue[1];
+            USBSerial.printf(">>:proc 1\r\n");
+            //current_temperature = (float) (value/100.0);
+            current_temperature = valuetmp;
+            USBSerial.printf(">>:proc 2\r\n");
+            current_temperature =current_temperature/10;
+            USBSerial.printf(">:current_temperature: %5.2f\r\n",current_temperature);
+
+*/
