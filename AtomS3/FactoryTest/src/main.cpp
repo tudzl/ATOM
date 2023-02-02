@@ -662,6 +662,7 @@ void Thermal_APP_loop(){
         uint8_t GUI_T_pos_Y = 8; //127,128 not working,104 ok, RAM issue?
         uint8_t GUI_T_pos_X = 8; //127,128 not working,104 ok, RAM issue?
         uint8_t GUI_H_pos_y = palette_height/2-4; 
+        uint8_t GUI_IMU_pos_y = palette_height-12; 
         uint8_t GUI_Akku_pos_y = 80; 
         sprite2.clear();
         sprite2.setCursor(0, 0);
@@ -671,13 +672,14 @@ void Thermal_APP_loop(){
          lcd.drawCenterString("BLE Thermal", lcd.width()/2, 1);
         //lcd.setCursor(25, 16);
         //lcd.printf("%08X", ir_addr);
-        lcd.drawFastHLine(0, 26, 128);
+        lcd.setColor(TFT_GOLD);
+        lcd.drawFastHLine(0, 22, 128);
         
     sprite3.createSprite(128, palette_height);
     sprite3.clear();
     sprite3.pushSprite(0, 128-palette_height); 
     USBSerial.printf("Created 128*%d sprite! \r\n",palette_height);
-        
+        float t;
   while(1){
 
         //press Btn to switch Palette/color
@@ -693,7 +695,7 @@ void Thermal_APP_loop(){
     }
 
 
-
+    sprite3.clear();
     sprite3.setTextColor(TFT_ORANGE);
     sprite3.setTextSize(3);
     sprite3.setCursor(GUI_T_pos_X,GUI_T_pos_Y);
@@ -703,7 +705,13 @@ void Thermal_APP_loop(){
 
    sprite3.setTextColor(TFT_SKYBLUE);
    sprite3.setCursor(GUI_T_pos_X,GUI_H_pos_y);
-   sprite3.printf("%3.1f %%" , current_humidity);
+   sprite3.printf("%3.1f %%\r\n" , current_humidity);
+   sprite3.setTextSize(1.4);
+   imu.getTemp(&t);
+
+   sprite3.setCursor(0,GUI_IMU_pos_y);
+   sprite3.setTextColor(TFT_VIOLET);
+   sprite3.printf("IMU_T: %5.2f C\r\n",t);
 
    sprite3.pushSprite(0, lcd.height()-palette_height); 
    delay(500);//if refresh too fast, will cause LCD flickring
